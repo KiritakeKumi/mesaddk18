@@ -148,7 +148,7 @@ zink_create_gfx_pipeline(struct zink_screen *screen,
    viewport_state.pViewports = NULL;
    viewport_state.scissorCount = screen->info.have_EXT_extended_dynamic_state ? 0 : state->dyn_state1.num_viewports;
    viewport_state.pScissors = NULL;
-   if (!screen->driver_workarounds.depth_clip_control_missing && !hw_rast_state->clip_halfz)
+   if (screen->info.have_EXT_depth_clip_control && !hw_rast_state->clip_halfz)
       viewport_state.pNext = &clip;
 
    VkPipelineRasterizationStateCreateInfo rast_state = {0};
@@ -270,7 +270,8 @@ zink_create_gfx_pipeline(struct zink_screen *screen,
    assert(state->rast_prim != PIPE_PRIM_MAX);
 
    VkPipelineRasterizationLineStateCreateInfoEXT rast_line_state;
-   if (screen->info.have_EXT_line_rasterization) {
+   if (screen->info.have_EXT_line_rasterization &&
+       !state->shader_keys.key[MESA_SHADER_FRAGMENT].key.fs.lower_line_smooth) {
       rast_line_state.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_LINE_STATE_CREATE_INFO_EXT;
       rast_line_state.pNext = rast_state.pNext;
       rast_line_state.stippledLineEnable = VK_FALSE;
@@ -294,7 +295,18 @@ zink_create_gfx_pipeline(struct zink_screen *screen,
          mode_idx += hw_rast_state->line_stipple_enable * 3;
          if (*(feat + mode_idx))
             rast_line_state.lineRasterizationMode = hw_rast_state->line_mode;
-         else
+         else if (hw_rast_state->line_stipple_enable &&
+                  screen->driver_workarounds.no_linestipple) {
+            /* drop line stipple, we can emulate it */
+            mode_idx -= hw_rast_state->line_stipple_enable * 3;
+            if (*(feat + mode_idx))
+               rast_line_state.lineRasterizationMode = hw_rast_state->line_mode;
+            /* non-strictLine default lines are either parallelogram or bresenham which while not in GL spec,
+             * in practice end up being within the two-pixel exception in the GL spec.
+             */
+            else if ((mode_idx != 1) || screen->info.props.limits.strictLines)
+               warn_missing_feature(warned[mode_idx], features[hw_rast_state->line_mode][0]);
+         } else if ((mode_idx != 1) || screen->info.props.limits.strictLines)
             warn_missing_feature(warned[mode_idx], features[hw_rast_state->line_mode][hw_rast_state->line_stipple_enable]);
       }
 
@@ -681,7 +693,7 @@ zink_create_gfx_pipeline_library(struct zink_screen *screen, struct zink_gfx_pro
    dynamicStateEnables[state_count++] = VK_DYNAMIC_STATE_LINE_RASTERIZATION_MODE_EXT;
    if (screen->info.dynamic_state3_feats.extendedDynamicState3LineStippleEnable)
       dynamicStateEnables[state_count++] = VK_DYNAMIC_STATE_LINE_STIPPLE_ENABLE_EXT;
-   if (screen->info.have_EXT_line_rasterization)
+   if (!screen->driver_workarounds.no_linestipple)
       dynamicStateEnables[state_count++] = VK_DYNAMIC_STATE_LINE_STIPPLE_EXT;
    assert(state_count < ARRAY_SIZE(dynamicStateEnables));
 

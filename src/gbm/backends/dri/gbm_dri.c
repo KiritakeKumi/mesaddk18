@@ -52,6 +52,7 @@
 #include "loader.h"
 #include "util/u_debug.h"
 #include "util/macros.h"
+#include "util/os_file.h"
 
 /* For importing wl_buffer */
 #if HAVE_WAYLAND_PLATFORM
@@ -164,6 +165,14 @@ image_get_buffers(__DRIdrawable *driDrawable,
                                  surf->dri_private, buffer_mask, buffers);
 }
 
+static int
+dri_get_display_fd(void *loaderPrivate)
+{
+   struct gbm_dri_device *dri = loaderPrivate;
+
+   return dri->base.v0.fd;
+}
+
 static void
 swrast_get_drawable_info(__DRIdrawable *driDrawable,
                          int           *x,
@@ -245,20 +254,22 @@ static const __DRIimageLookupExtension image_lookup_extension = {
 };
 
 static const __DRIdri2LoaderExtension dri2_loader_extension = {
-   .base = { __DRI_DRI2_LOADER, 4 },
+   .base = { __DRI_DRI2_LOADER, 6 },
 
    .getBuffers              = dri_get_buffers,
    .flushFrontBuffer        = dri_flush_front_buffer,
    .getBuffersWithFormat    = dri_get_buffers_with_format,
    .getCapability           = dri_get_capability,
+   .getDisplayFD            = dri_get_display_fd,
 };
 
 static const __DRIimageLoaderExtension image_loader_extension = {
-   .base = { __DRI_IMAGE_LOADER, 2 },
+   .base = { __DRI_IMAGE_LOADER, 5 },
 
    .getBuffers          = image_get_buffers,
    .flushFrontBuffer    = dri_flush_front_buffer,
    .getCapability       = dri_get_capability,
+   .getDisplayFD        = dri_get_display_fd,
 };
 
 static const __DRIswrastLoaderExtension swrast_loader_extension = {
@@ -431,12 +442,12 @@ dri_screen_create_dri2(struct gbm_dri_device *dri, char *driver_name)
       return -1;
 
    if (dri->dri2->base.version >= 4) {
-      dri->screen = dri->dri2->createNewScreen2(0, dri->base.v0.fd,
+      dri->screen = dri->dri2->createNewScreen2(0, dri->fd,
                                                 dri->loader_extensions,
                                                 dri->driver_extensions,
                                                 &dri->driver_configs, dri);
    } else {
-      dri->screen = dri->dri2->createNewScreen(0, dri->base.v0.fd,
+      dri->screen = dri->dri2->createNewScreen(0, dri->fd,
                                                dri->loader_extensions,
                                                &dri->driver_configs, dri);
    }
@@ -503,8 +514,20 @@ static int
 dri_screen_create(struct gbm_dri_device *dri)
 {
    char *driver_name;
+   int dup_fd, new_fd;
+   bool is_different_gpu;
 
-   driver_name = loader_get_driver_for_fd(dri->base.v0.fd);
+   dup_fd = os_dupfd_cloexec(dri->fd);
+   if (dup_fd < 0)
+      return -1;
+
+   new_fd = loader_get_user_preferred_fd(dup_fd, &is_different_gpu);
+   if (new_fd == dup_fd)
+      close(new_fd);
+   else
+      dri->fd = new_fd;
+
+   driver_name = loader_get_driver_for_fd(dri->fd);
    if (!driver_name)
       return -1;
 
@@ -565,9 +588,19 @@ static const struct gbm_dri_visual gbm_dri_visuals_table[] = {
      { 5, 5, 5, 1 },
    },
    {
+      GBM_FORMAT_ARGB4444, __DRI_IMAGE_FORMAT_ARGB4444,
+      { 8, 4, 0, 12 },
+      { 4, 4, 4, 4 },
+   },
+   {
      GBM_FORMAT_RGB565, __DRI_IMAGE_FORMAT_RGB565,
      { 11, 5, 0, -1 },
      { 5, 6, 5, 0 },
+   },
+   {
+     GBM_FORMAT_BGR888, __DRI_IMAGE_FORMAT_BGR888,
+     { 0, 8, 16, -1 },
+     { 8, 8, 8, 0 },
    },
    {
      GBM_FORMAT_XRGB8888, __DRI_IMAGE_FORMAT_XRGB8888,
@@ -620,6 +653,11 @@ static const struct gbm_dri_visual gbm_dri_visuals_table[] = {
      { 16, 16, 16, 16 },
    },
    {
+     GBM_FORMAT_AXBXGXRX106106106106, __DRI_IMAGE_FORMAT_AXBXGXRX106106106106,
+     { 6, 22, 38, 54 },
+     { 10, 10, 10, 10 },
+   },
+   {
      GBM_FORMAT_XBGR16161616F, __DRI_IMAGE_FORMAT_XBGR16161616F,
      { 0, 16, 32, -1 },
      { 16, 16, 16, 0 },
@@ -630,6 +668,12 @@ static const struct gbm_dri_visual gbm_dri_visuals_table[] = {
      { 0, 16, 32, 48 },
      { 16, 16, 16, 16 },
      true,
+   },
+   {
+     GBM_FORMAT_YUYV, __DRI_IMAGE_FORMAT_YUYV,
+   },
+   {
+     GBM_FORMAT_YVU444_PACK10_IMG, __DRI_IMAGE_FORMAT_YVU444_PACK10_IMG,
    },
 };
 
@@ -1302,8 +1346,11 @@ gbm_dri_bo_map(struct gbm_bo *_bo,
    if (!dri->context)
       dri->context = dri->dri2->createNewContext(dri->screen, NULL,
                                                  NULL, NULL);
-   assert(dri->context);
    mtx_unlock(&dri->mutex);
+   if (!dri->context) {
+      errno = ENOSYS;
+      return NULL;
+   }
 
    /* GBM flags and DRI flags are the same, so just pass them on */
    return dri->image->mapImage(dri->context, bo->image, x, y,
@@ -1412,6 +1459,40 @@ gbm_dri_surface_destroy(struct gbm_surface *_surf)
    free(surf);
 }
 
+static int
+gbm_dri_bo_blit(struct gbm_bo *_dst_bo, struct gbm_bo *_src_bo,
+                int dst_x0, int dst_y0, int dst_width, int dst_height,
+                int src_x0, int src_y0, int src_width, int src_height,
+                enum gbm_blit_flags flags)
+{
+   struct gbm_dri_device *dri = gbm_dri_device(_dst_bo->gbm);
+   struct gbm_dri_bo *dst_bo = gbm_dri_bo(_dst_bo);
+   struct gbm_dri_bo *src_bo = gbm_dri_bo(_src_bo);
+
+   if (!dri->image || dri->image->base.version < 9 || !dri->image->blitImage) {
+      errno = ENOSYS;
+      return 0;
+   }
+
+   mtx_lock(&dri->mutex);
+   if (!dri->context)
+      dri->context = dri->dri2->createNewContext(dri->screen, NULL,
+                                                 NULL, NULL);
+   mtx_unlock(&dri->mutex);
+   if (!dri->context) {
+      errno = ENOSYS;
+      return 0;
+   }
+
+   /* GBM flags and DRI flags are the same, so just pass them on */
+   dri->image->blitImage(dri->context, dst_bo->image, src_bo->image,
+                         dst_x0, dst_y0, dst_width, dst_height,
+                         src_x0, src_y0, src_width, src_height,
+                         flags);
+
+   return 1;
+}
+
 static void
 dri_destroy(struct gbm_device *gbm)
 {
@@ -1427,6 +1508,9 @@ dri_destroy(struct gbm_device *gbm)
    free(dri->driver_configs);
    dlclose(dri->driver);
    free(dri->driver_name);
+
+   if (dri->fd >= 0 && dri->fd != dri->base.v0.fd)
+      close (dri->fd);
 
    free(dri);
 }
@@ -1448,6 +1532,8 @@ dri_device_create(int fd, uint32_t gbm_backend_version)
    dri = calloc(1, sizeof *dri);
    if (!dri)
       return NULL;
+
+   dri->fd = fd;
 
    dri->base.v0.fd = fd;
    dri->base.v0.backend_version = gbm_backend_version;
@@ -1472,6 +1558,8 @@ dri_device_create(int fd, uint32_t gbm_backend_version)
    dri->base.v0.surface_destroy = gbm_dri_surface_destroy;
 
    dri->base.v0.name = "drm";
+
+   dri->base.v1.bo_blit = gbm_dri_bo_blit;
 
    dri->visual_table = gbm_dri_visuals_table;
    dri->num_visuals = ARRAY_SIZE(gbm_dri_visuals_table);

@@ -24,6 +24,8 @@ inc_src = include_directories('.')
 inc_gallium = include_directories('gallium/include')
 inc_gallium_aux = include_directories('gallium/auxiliary')
 inc_amd_common = include_directories('amd/common')
+inc_pvr = include_directories('mesa/main', 'mapi/glapi',
+                              'gallium/frontends/dri')
 inc_tool = include_directories('tool')
 inc_virtio_gpu = include_directories('virtio/virtio-gpu')
 pps_datasources = []
@@ -102,6 +104,9 @@ endif
 if with_gallium_panfrost or with_gallium_lima or with_panfrost_vk or with_tools.contains('panfrost')
   subdir('panfrost')
 endif
+if with_pvr_vk
+  subdir('pvr')
+endif
 if with_gallium_virgl or with_virtio_vk
   subdir('virtio')
 endif
@@ -126,7 +131,7 @@ endif
 if with_gallium
   subdir('mesa')
   subdir('gallium')
-  if with_glx == 'dri'
+  if with_glx == 'dri' or with_glx == 'null'
      subdir('glx')
   endif
   # This has to be here since it requires libgallium, and subdir cannot

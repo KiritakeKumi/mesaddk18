@@ -117,7 +117,6 @@ supported, although some of these might not actually get verified:
 
 * ``VkPhysicalDeviceFeatures``:
 
-  * ``occlusionQueryPrecise``
   * ``dualSrcBlend``
 
 * Device extensions:
@@ -240,25 +239,11 @@ are required to be supported
 * ``VkPhysicalDeviceFeatures``:
 
   * ``samplerAnisotropy``
-  * ``pipelineStatisticsQuery``
   * ``depthBiasClamp``
 
 * Device extensions:
 
   * `VK_KHR_draw_indirect_count`_
-
-Performance
------------
-
-If you notice poor performance and high CPU usage while running an application,
-changing the descriptor manager may improve performance:
-
-.. envvar:: ZINK_DESCRIPTORS <mode> ("auto")
-
-``auto``
-   Automatically detect best mode. This is the default.
-``lazy``
-   Attempt to use the least amount of CPU by binding descriptors opportunistically.
 
 Debugging
 ---------

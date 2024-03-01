@@ -10,6 +10,7 @@
  */
 struct gl_config
 {
+   GLboolean rgbMode;
    GLboolean floatMode;
    GLuint doubleBufferMode;
    GLuint stereoMode;
@@ -26,11 +27,24 @@ struct gl_config
    /* ARB_multisample / SGIS_multisample */
    GLuint samples;
 
+   /* GLX 1.3 */
+   GLint maxPbufferWidth;
+   GLint maxPbufferHeight;
+   GLint maxPbufferPixels;
+
    /* OML_swap_method */
    GLint swapMethod;
 
    /* EXT_framebuffer_sRGB */
    GLint sRGBCapable;
+
+   /* EXT_yuv_surface */
+   GLint YUVOrder;
+   GLint YUVNumberOfPlanes;
+   GLint YUVSubsample;
+   GLint YUVDepthRange;
+   GLint YUVCSCStandard;
+   GLint YUVPlaneBPP;
 };
 
 

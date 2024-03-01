@@ -564,11 +564,13 @@ _eglCreateExtensionsString(_EGLDisplay *disp)
    _EGL_CHECK_EXTENSION(EXT_image_dma_buf_import);
    _EGL_CHECK_EXTENSION(EXT_image_dma_buf_import_modifiers);
    _EGL_CHECK_EXTENSION(EXT_protected_content);
+   _EGL_CHECK_EXTENSION(EXT_image_gl_colorspace);
    _EGL_CHECK_EXTENSION(EXT_protected_surface);
    _EGL_CHECK_EXTENSION(EXT_present_opaque);
    _EGL_CHECK_EXTENSION(EXT_surface_CTA861_3_metadata);
    _EGL_CHECK_EXTENSION(EXT_surface_SMPTE2086_metadata);
    _EGL_CHECK_EXTENSION(EXT_swap_buffers_with_damage);
+   _EGL_CHECK_EXTENSION(EXT_yuv_surface);
 
    _EGL_CHECK_EXTENSION(IMG_context_priority);
 
@@ -613,6 +615,7 @@ _eglCreateExtensionsString(_EGLDisplay *disp)
    _EGL_CHECK_EXTENSION(WL_bind_wayland_display);
    _EGL_CHECK_EXTENSION(WL_create_wayland_buffer_from_image);
 
+   _EGL_CHECK_EXTENSION(IMG_cl_image);
 #undef _EGL_CHECK_EXTENSION
 }
 
@@ -934,6 +937,7 @@ eglMakeCurrent(EGLDisplay dpy, EGLSurface draw, EGLSurface read,
                EGLContext ctx)
 {
    _EGLDisplay *disp = _eglLockDisplay(dpy);
+   _EGLContext *current_context = _eglGetCurrentContext();
    _EGLContext *context = _eglLookupContext(ctx, disp);
    _EGLSurface *draw_surf = _eglLookupSurface(draw, disp);
    _EGLSurface *read_surf = _eglLookupSurface(read, disp);
@@ -987,8 +991,17 @@ eglMakeCurrent(EGLDisplay dpy, EGLSurface draw, EGLSurface read,
        draw_surf && !draw_surf->ProtectedContent)
       RETURN_EGL_ERROR(disp, EGL_BAD_ACCESS, EGL_FALSE);
 
-   egl_relax (disp, &draw_surf->Resource, &read_surf->Resource, &context->Resource) {
-      ret = disp->Driver->MakeCurrent(disp, draw_surf, read_surf, context);
+   /* As an optimisation don't do anything unless something has changed */
+   if (context != current_context ||
+       (current_context &&
+        (draw_surf != current_context->DrawSurface ||
+         read_surf != current_context->ReadSurface)) ||
+       (!current_context && (draw_surf || read_surf))) {
+           egl_relax (disp, &draw_surf->Resource, &read_surf->Resource, &context->Resource) {
+              ret = disp->Driver->MakeCurrent(disp, draw_surf, read_surf, context);
+	   }
+   } else {
+	   ret = EGL_TRUE;
    }
 
    RETURN_EGL_EVAL(disp, ret);
@@ -1051,7 +1064,10 @@ _eglCreateWindowSurfaceCommon(_EGLDisplay *disp, EGLConfig config,
 
 
    if (native_window == NULL)
-      RETURN_EGL_ERROR(disp, EGL_BAD_NATIVE_WINDOW, EGL_NO_SURFACE);
+#ifdef HAVE_NULL_PLATFORM
+      if (disp && disp->Platform != _EGL_PLATFORM_NULL)
+#endif
+         RETURN_EGL_ERROR(disp, EGL_BAD_NATIVE_WINDOW, EGL_NO_SURFACE);
 
    if (disp && (disp->Platform == _EGL_PLATFORM_SURFACELESS ||
                 disp->Platform == _EGL_PLATFORM_DEVICE)) {

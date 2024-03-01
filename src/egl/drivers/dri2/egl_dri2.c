@@ -316,6 +316,7 @@ static const EGLint dri2_to_egl_attribute_map[__DRI_ATTRIB_MAX] = {
    [__DRI_ATTRIB_MAX_SWAP_INTERVAL]     = EGL_MAX_SWAP_INTERVAL,
    [__DRI_ATTRIB_MIN_SWAP_INTERVAL]     = EGL_MIN_SWAP_INTERVAL,
    [__DRI_ATTRIB_YINVERTED]             = EGL_Y_INVERTED_NOK,
+   [__DRI_ATTRIB_YUV_NUMBER_OF_PLANES]  = EGL_YUV_NUMBER_OF_PLANES_EXT,
 };
 
 const __DRIconfig *
@@ -416,6 +417,7 @@ dri2_add_config(_EGLDisplay *disp, const __DRIconfig *dri_config, int id,
    struct dri2_egl_display *dri2_dpy = dri2_egl_display(disp);
    _EGLConfig base;
    unsigned int attrib, value, double_buffer;
+   unsigned int pbuffer_width = 0, pbuffer_height = 0, pbuffer_pixels = 0;
    bool srgb = false;
    EGLint key, bind_to_texture_rgb, bind_to_texture_rgba;
    int dri_shifts[4] = { -1, -1, -1, -1 };
@@ -442,6 +444,8 @@ dri2_add_config(_EGLDisplay *disp, const __DRIconfig *dri_config, int id,
             value = EGL_RGB_BUFFER;
          else if (value & __DRI_ATTRIB_LUMINANCE_BIT)
             value = EGL_LUMINANCE_BUFFER;
+         else if (value & __DRI_ATTRIB_YUV_BIT)
+            value = EGL_YUV_BUFFER_EXT;
          else
             return NULL;
          base.ColorBufferType = value;
@@ -537,21 +541,103 @@ dri2_add_config(_EGLDisplay *disp, const __DRIconfig *dri_config, int id,
          break;
 
       case __DRI_ATTRIB_MAX_PBUFFER_WIDTH:
-         base.MaxPbufferWidth = _EGL_MAX_PBUFFER_WIDTH;
+         pbuffer_width = (value != 0) ? value : _EGL_MAX_PBUFFER_WIDTH;
          break;
+
       case __DRI_ATTRIB_MAX_PBUFFER_HEIGHT:
-         base.MaxPbufferHeight = _EGL_MAX_PBUFFER_HEIGHT;
+         pbuffer_height = (value != 0) ? value : _EGL_MAX_PBUFFER_HEIGHT;
          break;
+
+      case __DRI_ATTRIB_MAX_PBUFFER_PIXELS:
+         pbuffer_pixels = value;
+         break;
+
       case __DRI_ATTRIB_MUTABLE_RENDER_BUFFER:
          if (disp->Extensions.KHR_mutable_render_buffer)
             surface_type |= EGL_MUTABLE_RENDER_BUFFER_BIT_KHR;
          break;
+
+      case __DRI_ATTRIB_YUV_ORDER:
+         if (value & __DRI_ATTRIB_YUV_ORDER_YUV_BIT)
+            value = EGL_YUV_ORDER_YUV_EXT;
+         else if (value & __DRI_ATTRIB_YUV_ORDER_YVU_BIT)
+            value = EGL_YUV_ORDER_YVU_EXT;
+         else if (value & __DRI_ATTRIB_YUV_ORDER_YUYV_BIT)
+            value = EGL_YUV_ORDER_YUYV_EXT;
+         else if (value & __DRI_ATTRIB_YUV_ORDER_UYVY_BIT)
+            value = EGL_YUV_ORDER_UYVY_EXT;
+         else if (value & __DRI_ATTRIB_YUV_ORDER_YVYU_BIT)
+            value = EGL_YUV_ORDER_YVYU_EXT;
+         else if (value & __DRI_ATTRIB_YUV_ORDER_VYUY_BIT)
+            value = EGL_YUV_ORDER_VYUY_EXT;
+         else if (value & __DRI_ATTRIB_YUV_ORDER_AYUV_BIT)
+            value = EGL_YUV_ORDER_AYUV_EXT;
+         else
+            value = EGL_NONE;
+         _eglSetConfigKey(&base, EGL_YUV_ORDER_EXT, value);
+         break;
+
+      case __DRI_ATTRIB_YUV_SUBSAMPLE:
+         if (value & __DRI_ATTRIB_YUV_SUBSAMPLE_4_2_0_BIT)
+            value = EGL_YUV_SUBSAMPLE_4_2_0_EXT;
+         else if (value & __DRI_ATTRIB_YUV_SUBSAMPLE_4_2_2_BIT)
+            value = EGL_YUV_SUBSAMPLE_4_2_2_EXT;
+         else if (value & __DRI_ATTRIB_YUV_SUBSAMPLE_4_4_4_BIT)
+            value = EGL_YUV_SUBSAMPLE_4_4_4_EXT;
+         else
+            value = EGL_NONE;
+         _eglSetConfigKey(&base, EGL_YUV_SUBSAMPLE_EXT, value);
+         break;
+
+      case __DRI_ATTRIB_YUV_DEPTH_RANGE:
+         if (value & __DRI_ATTRIB_YUV_DEPTH_RANGE_LIMITED_BIT)
+            value = EGL_YUV_DEPTH_RANGE_LIMITED_EXT;
+         else if (value & __DRI_ATTRIB_YUV_DEPTH_RANGE_FULL_BIT)
+            value = EGL_YUV_DEPTH_RANGE_FULL_EXT;
+         else
+            value = EGL_NONE;
+         _eglSetConfigKey(&base, EGL_YUV_DEPTH_RANGE_EXT, value);
+         break;
+
+      case __DRI_ATTRIB_YUV_CSC_STANDARD:
+         if (value & __DRI_ATTRIB_YUV_CSC_STANDARD_601_BIT)
+            value = EGL_YUV_CSC_STANDARD_601_EXT;
+         else if (value & __DRI_ATTRIB_YUV_CSC_STANDARD_709_BIT)
+            value = EGL_YUV_CSC_STANDARD_709_EXT;
+         else if (value & __DRI_ATTRIB_YUV_CSC_STANDARD_2020_BIT)
+            value = EGL_YUV_CSC_STANDARD_2020_EXT;
+         else
+            value = EGL_NONE;
+         _eglSetConfigKey(&base, EGL_YUV_CSC_STANDARD_EXT, value);
+         break;
+
+      case __DRI_ATTRIB_YUV_PLANE_BPP:
+         if (value & __DRI_ATTRIB_YUV_PLANE_BPP_0_BIT)
+            value = EGL_YUV_PLANE_BPP_0_EXT;
+         else if (value & __DRI_ATTRIB_YUV_PLANE_BPP_8_BIT)
+            value = EGL_YUV_PLANE_BPP_8_EXT;
+         else if (value & __DRI_ATTRIB_YUV_PLANE_BPP_10_BIT)
+            value = EGL_YUV_PLANE_BPP_10_EXT;
+         else
+            value = EGL_NONE;
+         _eglSetConfigKey(&base, EGL_YUV_PLANE_BPP_EXT, value);
+         break;
+
       default:
          key = dri2_to_egl_attribute_map[attrib];
          if (key != 0)
             _eglSetConfigKey(&base, key, value);
          break;
       }
+   }
+
+   if (surface_type & EGL_PBUFFER_BIT) {
+      if (pbuffer_pixels == 0)
+         pbuffer_pixels = pbuffer_width * pbuffer_height;
+
+      base.MaxPbufferWidth = pbuffer_width;
+      base.MaxPbufferHeight = pbuffer_height;
+      base.MaxPbufferPixels = pbuffer_pixels;
    }
 
    if (attr_list)
@@ -583,6 +669,17 @@ dri2_add_config(_EGLDisplay *disp, const __DRIconfig *dri_config, int id,
 
    base.RenderableType = disp->ClientAPIs;
    base.Conformant = disp->ClientAPIs;
+
+   /*
+    * We assume that if dri_config is YUV then GL_EXT_YUV_target must be
+    * supported, which requires OpenGL ES 3.0.
+    */
+   if (base.ColorBufferType == EGL_YUV_BUFFER_EXT) {
+      base.RenderableType &= EGL_OPENGL_ES3_BIT;
+      base.Conformant &= EGL_OPENGL_ES3_BIT;
+   }
+   if (!base.RenderableType)
+      return NULL;
 
    base.MinSwapInterval = dri2_dpy->min_swap_interval;
    base.MaxSwapInterval = dri2_dpy->max_swap_interval;
@@ -1024,6 +1121,13 @@ dri2_setup_screen(_EGLDisplay *disp)
          disp->Extensions.EXT_image_dma_buf_import_modifiers = EGL_TRUE;
       }
 #endif
+      if (dri2_dpy->image->base.version >= 8 &&
+          dri2_dpy->image->createImageFromBuffer) {
+         disp->Extensions.IMG_cl_image = EGL_TRUE;
+      }
+
+      if (disp->Extensions.KHR_gl_colorspace)
+         disp->Extensions.EXT_image_gl_colorspace = EGL_TRUE;
    }
 
    if (dri2_dpy->flush_control)
@@ -1038,6 +1142,8 @@ dri2_setup_screen(_EGLDisplay *disp)
    disp->Extensions.EXT_protected_content =
       dri2_renderer_query_integer(dri2_dpy,
                                   __DRI2_RENDERER_HAS_PROTECTED_CONTEXT);
+
+   disp->Extensions.EXT_yuv_surface = EGL_TRUE;
 }
 
 void
@@ -1194,6 +1300,9 @@ dri2_initialize(_EGLDisplay *disp)
    case _EGL_PLATFORM_DEVICE:
       ret = dri2_initialize_device(disp);
       break;
+   case _EGL_PLATFORM_NULL:
+      ret = dri2_initialize_null(disp);
+      break;
    case _EGL_PLATFORM_X11:
    case _EGL_PLATFORM_XCB:
       ret = dri2_initialize_x11(disp);
@@ -1255,8 +1364,6 @@ dri2_display_destroy(_EGLDisplay *disp)
          dri2_dpy->vtbl->close_screen_notify(disp);
       dri2_dpy->core->destroyScreen(dri2_dpy->dri_screen);
    }
-   if (dri2_dpy->fd >= 0)
-      close(dri2_dpy->fd);
 
    /* Don't dlclose the driver when building with the address sanitizer, so you
     * get good symbols from the leak reports.
@@ -1282,10 +1389,28 @@ dri2_display_destroy(_EGLDisplay *disp)
    case _EGL_PLATFORM_WAYLAND:
       dri2_teardown_wayland(dri2_dpy);
       break;
+   case _EGL_PLATFORM_NULL:
+      dri2_teardown_null(dri2_dpy);
+      break;
    default:
       /* TODO: add teardown for other platforms */
       break;
    }
+
+   switch (disp->Platform) {
+   case _EGL_PLATFORM_DRM:
+   case _EGL_PLATFORM_NULL:
+   case _EGL_PLATFORM_WAYLAND:
+   case _EGL_PLATFORM_X11:
+      if (dri2_dpy->fd_dpy >= 0 && dri2_dpy->fd_dpy != dri2_dpy->fd)
+         close(dri2_dpy->fd_dpy);
+      break;
+   default:
+      break;
+   }
+
+   if (dri2_dpy->fd >= 0)
+      close(dri2_dpy->fd);
 
    /* The drm platform does not create the screen/driver_configs but reuses
     * the ones from the gbm device. As such the gbm itself is responsible
@@ -1937,6 +2062,26 @@ dri2_make_current(_EGLDisplay *disp, _EGLSurface *dsurf,
    return EGL_TRUE;
 }
 
+static EGLint
+dri2_query_context_client_version(_EGLDisplay *disp, _EGLContext *ctx)
+{
+   struct dri2_egl_context *dri2_ctx = dri2_egl_context(ctx);
+   struct dri2_egl_display *dri2_dpy = dri2_egl_display(disp);
+
+   switch (dri2_ctx->base.ClientAPI) {
+   case EGL_OPENGL_ES_API:
+      switch (dri2_ctx->base.ClientMajorVersion) {
+      case 2:
+         return dri2_renderer_query_integer(dri2_dpy,
+                   __DRI2_RENDERER_OPENGL_ES2_CONTEXT_CLIENT_VERSION_IMG);
+      default:
+         return 0;
+      }
+   default:
+      return 0;
+   }
+}
+
 __DRIdrawable *
 dri2_surface_get_dri_drawable(_EGLSurface *surf)
 {
@@ -2399,6 +2544,7 @@ static const struct wl_drm_components_descriptor {
    { __DRI_IMAGE_COMPONENTS_Y_U_V, EGL_TEXTURE_Y_U_V_WL, 3 },
    { __DRI_IMAGE_COMPONENTS_Y_UV, EGL_TEXTURE_Y_UV_WL, 2 },
    { __DRI_IMAGE_COMPONENTS_Y_XUXV, EGL_TEXTURE_Y_XUXV_WL, 2 },
+   { __DRI_IMAGE_COMPONENTS_EXTERNAL, EGL_TEXTURE_EXTERNAL_WL, 1 },
 };
 
 static _EGLImage *
@@ -2420,6 +2566,11 @@ dri2_create_image_wayland_wl_buffer(_EGLDisplay *disp, _EGLContext *ctx,
 
    if (!_eglParseImageAttribList(&attrs, disp, attr_list))
       return NULL;
+
+   if (attrs.GLColorspace != EGL_GL_COLORSPACE_DEFAULT_EXT) {
+      _eglError(EGL_BAD_MATCH, "unsupported colorspace");
+      return NULL;
+   }
 
    plane = attrs.PlaneWL;
    f = buffer->driver_format;
@@ -2465,17 +2616,13 @@ dri2_get_msc_rate_angle(_EGLDisplay *disp, _EGLSurface *surf,
    return dri2_dpy->vtbl->get_msc_rate(disp, surf, numerator, denominator);
 }
 
-/**
- * Set the error code after a call to
- * dri2_egl_image::dri_image::createImageFromTexture.
- */
 static void
-dri2_create_image_khr_texture_error(int dri_error)
+dri2_create_image_khr_error(int dri_error)
 {
    EGLint egl_error = egl_error_from_dri_image_error(dri_error);
 
    if (egl_error != EGL_SUCCESS)
-      _eglError(egl_error, "dri2_create_image_khr_texture");
+      _eglError(egl_error, "dri2_create_image_khr");
 }
 
 static _EGLImage *
@@ -2500,6 +2647,11 @@ dri2_create_image_khr_texture(_EGLDisplay *disp, _EGLContext *ctx,
 
    if (!_eglParseImageAttribList(&attrs, disp, attr_list))
       return EGL_NO_IMAGE_KHR;
+
+   if (attrs.GLColorspace != EGL_GL_COLORSPACE_DEFAULT_EXT) {
+      _eglError(EGL_BAD_MATCH, "unsupported colorspace");
+      return EGL_NO_IMAGE_KHR;
+   }
 
    switch (target) {
    case EGL_GL_TEXTURE_2D_KHR:
@@ -2554,7 +2706,49 @@ dri2_create_image_khr_texture(_EGLDisplay *disp, _EGLContext *ctx,
                                               attrs.GLTextureLevel,
                                               &error,
                                               NULL);
-   dri2_create_image_khr_texture_error(error);
+   dri2_create_image_khr_error(error);
+
+   if (!dri2_img->dri_image) {
+      free(dri2_img);
+      return EGL_NO_IMAGE_KHR;
+   }
+   return &dri2_img->base;
+}
+
+static _EGLImage *
+dri2_create_image_img_buffer(_EGLDisplay *disp, _EGLContext *ctx,
+				   EGLenum target,
+				   EGLClientBuffer buffer,
+				   const EGLint *attr_list)
+{
+   struct dri2_egl_display *dri2_dpy = dri2_egl_display(disp);
+   struct dri2_egl_context *dri2_ctx = dri2_egl_context(ctx);
+   struct dri2_egl_image *dri2_img;
+   unsigned error;
+
+   switch (target) {
+   case EGL_CL_IMAGE_IMG:
+      break;
+   default:
+      _eglError(EGL_BAD_PARAMETER, "dri2_create_image_khr");
+      return EGL_NO_IMAGE_KHR;
+   }
+
+   dri2_img = malloc(sizeof *dri2_img);
+   if (!dri2_img) {
+      _eglError(EGL_BAD_ALLOC, "dri2_create_image_khr");
+      return EGL_NO_IMAGE_KHR;
+   }
+
+   _eglInitImage(&dri2_img->base, disp);
+
+   dri2_img->dri_image =
+      dri2_dpy->image->createImageFromBuffer(dri2_ctx->dri_context,
+                                              target,
+                                              buffer,
+                                              &error,
+                                              NULL);
+   dri2_create_image_khr_error(error);
 
    if (!dri2_img->dri_image) {
       free(dri2_img);
@@ -2612,6 +2806,11 @@ dri2_create_image_mesa_drm_buffer(_EGLDisplay *disp, _EGLContext *ctx,
        attrs.DRMBufferStrideMESA <= 0) {
       _eglError(EGL_BAD_PARAMETER,
                 "bad width, height or stride");
+      return NULL;
+   }
+
+   if (attrs.GLColorspace != EGL_GL_COLORSPACE_DEFAULT_EXT) {
+      _eglError(EGL_BAD_MATCH, "unsupported colorspace");
       return NULL;
    }
 
@@ -2758,6 +2957,7 @@ dri2_num_fourcc_format_planes(EGLint format)
    case DRM_FORMAT_XBGR16161616:
    case DRM_FORMAT_XBGR16161616F:
    case DRM_FORMAT_ABGR16161616F:
+   case DRM_FORMAT_AXBXGXRX106106106106:
    case DRM_FORMAT_YUYV:
    case DRM_FORMAT_YVYU:
    case DRM_FORMAT_UYVY:
@@ -2770,6 +2970,7 @@ dri2_num_fourcc_format_planes(EGLint format)
    case DRM_FORMAT_Y410:
    case DRM_FORMAT_Y412:
    case DRM_FORMAT_Y416:
+   case DRM_FORMAT_YVU444_PACK10_IMG:
       return 1;
 
    case DRM_FORMAT_NV12:
@@ -2794,6 +2995,23 @@ dri2_num_fourcc_format_planes(EGLint format)
       return 3;
 
    default:
+      return 0;
+   }
+}
+
+static int
+dri2_get_srgb_fourcc(int drm_fourcc)
+{
+   switch (drm_fourcc) {
+   case DRM_FORMAT_ARGB8888:
+      return __DRI_IMAGE_FOURCC_SARGB8888;
+   case DRM_FORMAT_ABGR8888:
+      return __DRI_IMAGE_FOURCC_SABGR8888;
+   case DRM_FORMAT_BGR888:
+      return __DRI_IMAGE_FOURCC_SBGR888;
+   default:
+      _eglLog(_EGL_DEBUG, "%s: no matching sRGB FourCC for %#x",
+              __func__, drm_fourcc);
       return 0;
    }
 }
@@ -2955,6 +3173,7 @@ dri2_create_image_dma_buf(_EGLDisplay *disp, _EGLContext *ctx,
    int fds[DMA_BUF_MAX_PLANES];
    int pitches[DMA_BUF_MAX_PLANES];
    int offsets[DMA_BUF_MAX_PLANES];
+   int fourcc;
    uint64_t modifier;
    bool has_modifier = false;
    unsigned error;
@@ -2980,6 +3199,18 @@ dri2_create_image_dma_buf(_EGLDisplay *disp, _EGLContext *ctx,
    num_fds = dri2_check_dma_buf_format(&attrs);
    if (!num_fds)
       return NULL;
+
+   if (attrs.GLColorspace == EGL_GL_COLORSPACE_SRGB_KHR) {
+      fourcc = dri2_get_srgb_fourcc(attrs.DMABufFourCC.Value);
+      if (fourcc == 0) {
+         _eglError(EGL_BAD_MATCH, "unsupported colorspace");
+         return NULL;
+      }
+   } else {
+      assert(attrs.GLColorspace == EGL_GL_COLORSPACE_LINEAR_KHR ||
+             attrs.GLColorspace == EGL_GL_COLORSPACE_DEFAULT_EXT);
+      fourcc = attrs.DMABufFourCC.Value;
+   }
 
    for (unsigned i = 0; i < num_fds; ++i) {
       fds[i] = attrs.DMABufPlaneFds[i].Value;
@@ -3025,7 +3256,7 @@ dri2_create_image_dma_buf(_EGLDisplay *disp, _EGLContext *ctx,
       }
       dri_image =
          dri2_dpy->image->createImageFromDmaBufs2(dri2_dpy->dri_screen,
-            attrs.Width, attrs.Height, attrs.DMABufFourCC.Value,
+            attrs.Width, attrs.Height, fourcc,
             modifier, fds, num_fds, pitches, offsets,
             attrs.DMABufYuvColorSpaceHint.Value,
             attrs.DMABufSampleRangeHint.Value,
@@ -3037,7 +3268,7 @@ dri2_create_image_dma_buf(_EGLDisplay *disp, _EGLContext *ctx,
    else {
       dri_image =
          dri2_dpy->image->createImageFromDmaBufs(dri2_dpy->dri_screen,
-            attrs.Width, attrs.Height, attrs.DMABufFourCC.Value,
+            attrs.Width, attrs.Height, fourcc,
             fds, num_fds, pitches, offsets,
             attrs.DMABufYuvColorSpaceHint.Value,
             attrs.DMABufSampleRangeHint.Value,
@@ -3299,6 +3530,8 @@ dri2_create_image_khr(_EGLDisplay *disp, _EGLContext *ctx, EGLenum target,
    case EGL_WAYLAND_BUFFER_WL:
       return dri2_create_image_wayland_wl_buffer(disp, ctx, buffer, attr_list);
 #endif
+   case EGL_CL_IMAGE_IMG:
+      return dri2_create_image_img_buffer(disp, ctx, target, buffer, attr_list);
    default:
       _eglError(EGL_BAD_PARAMETER, "dri2_create_image_khr");
       return EGL_NO_IMAGE_KHR;
@@ -3391,7 +3624,7 @@ dri2_bind_wayland_display_wl(_EGLDisplay *disp, struct wl_display *wl_dpy)
    if (dri2_dpy->wl_server_drm)
       goto fail;
 
-   device_name = drmGetRenderDeviceNameFromFd(dri2_dpy->fd);
+   device_name = drmGetRenderDeviceNameFromFd(dri2_dpy->fd_dpy);
    if (!device_name)
       device_name = strdup(dri2_dpy->device_name);
    if (!device_name)
@@ -3402,6 +3635,15 @@ dri2_bind_wayland_display_wl(_EGLDisplay *disp, struct wl_display *wl_dpy)
        dri2_dpy->image->base.version >= 7 &&
        dri2_dpy->image->createImageFromFds != NULL)
       flags |= WAYLAND_DRM_PRIME;
+   else if (dri2_dpy->image->base.version >= 10 &&
+            dri2_dpy->image->getCapabilities != NULL) {
+         int capabilities;
+
+         capabilities = dri2_dpy->image->getCapabilities(dri2_dpy->dri_screen);
+         if ((capabilities & __DRI_IMAGE_CAP_PRIME_IMPORT) != 0 &&
+             (capabilities & __DRI_IMAGE_CAP_PRIME_EXPORT) != 0)
+            flags |= WAYLAND_DRM_PRIME;
+   }
 
    dri2_dpy->wl_server_drm =
            wayland_drm_init(wl_dpy, device_name,
@@ -3848,6 +4090,7 @@ const _EGLDriver _eglDriver = {
    .CreateContext = dri2_create_context,
    .DestroyContext = dri2_destroy_context,
    .MakeCurrent = dri2_make_current,
+   .QueryContextClientVersion = dri2_query_context_client_version,
    .CreateWindowSurface = dri2_create_window_surface,
    .CreatePixmapSurface = dri2_create_pixmap_surface,
    .CreatePbufferSurface = dri2_create_pbuffer_surface,

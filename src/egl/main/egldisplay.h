@@ -56,6 +56,7 @@ enum _egl_platform_type {
    _EGL_PLATFORM_SURFACELESS,
    _EGL_PLATFORM_DEVICE,
    _EGL_PLATFORM_WINDOWS,
+   _EGL_PLATFORM_NULL,
 
    _EGL_NUM_PLATFORMS,
    _EGL_INVALID_PLATFORM = -1
@@ -111,6 +112,7 @@ struct _egl_extensions
    EGLBoolean EXT_create_context_robustness;
    EGLBoolean EXT_image_dma_buf_import;
    EGLBoolean EXT_image_dma_buf_import_modifiers;
+   EGLBoolean EXT_image_gl_colorspace;
    EGLBoolean EXT_pixel_format_float;
    EGLBoolean EXT_protected_content;
    EGLBoolean EXT_protected_surface;
@@ -118,6 +120,7 @@ struct _egl_extensions
    EGLBoolean EXT_surface_CTA861_3_metadata;
    EGLBoolean EXT_surface_SMPTE2086_metadata;
    EGLBoolean EXT_swap_buffers_with_damage;
+   EGLBoolean EXT_yuv_surface;
 
    unsigned int IMG_context_priority;
 #define  __EGL_CONTEXT_PRIORITY_LOW_BIT    0
@@ -157,6 +160,8 @@ struct _egl_extensions
 
    EGLBoolean WL_bind_wayland_display;
    EGLBoolean WL_create_wayland_buffer_from_image;
+
+   EGLBoolean IMG_cl_image;
 };
 
 struct _egl_display

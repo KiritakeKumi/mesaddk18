@@ -41,6 +41,12 @@ endif
 cc = meson.get_compiler('c')
 cpp = meson.get_compiler('cpp')
 
+if not cpp.compiles('thread_local int x = 0;', name : 'thread_local')
+  if cpp.has_argument('-std=c++11')
+     add_project_arguments('-std=c++11', language : 'cpp')
+  endif
+endif
+
 null_dep = dependency('', required : false)
 
 if get_option('layout') != 'mirror'
@@ -192,16 +198,16 @@ if gallium_drivers.contains('auto')
     if ['x86', 'x86_64'].contains(host_machine.cpu_family())
       gallium_drivers = [
         'r300', 'r600', 'radeonsi', 'nouveau', 'virgl', 'svga', 'swrast',
-        'iris', 'crocus', 'i915'
+        'iris', 'crocus', 'i915', 'pvr'
       ]
     elif ['arm', 'aarch64'].contains(host_machine.cpu_family())
       gallium_drivers = [
-        'v3d', 'vc4', 'freedreno', 'etnaviv', 'nouveau', 'svga',
-        'tegra', 'virgl', 'lima', 'panfrost', 'swrast'
+        'v3d', 'vc4', 'freedreno', 'etnaviv', 'nouveau',
+        'tegra', 'virgl', 'lima', 'panfrost', 'swrast', 'pvr'
       ]
     elif ['mips', 'mips64', 'riscv32', 'riscv64'].contains(host_machine.cpu_family())
       gallium_drivers = [
-        'r300', 'r600', 'radeonsi', 'nouveau', 'virgl', 'swrast'
+        'r300', 'r600', 'radeonsi', 'nouveau', 'virgl', 'swrast', 'pvr'
       ]
     else
       error('Unknown architecture @0@. Please pass -Dgallium-drivers to set driver options. Patches gladly accepted to fix this.'.format(
@@ -234,6 +240,7 @@ with_gallium_lima = gallium_drivers.contains('lima')
 with_gallium_zink = gallium_drivers.contains('zink')
 with_gallium_d3d12 = gallium_drivers.contains('d3d12')
 with_gallium_asahi = gallium_drivers.contains('asahi')
+with_gallium_pvr = gallium_drivers.contains('pvr')
 foreach gallium_driver : gallium_drivers
   pre_args += '-DHAVE_@0@'.format(gallium_driver.to_upper())
 endforeach
@@ -243,6 +250,17 @@ with_gallium_kmsro = with_gallium_v3d or with_gallium_vc4 or with_gallium_etnavi
 
 if not system_has_kms_drm
    with_gallium_kmsro = false
+endif
+
+if with_gallium_pvr
+  gallium_pvr_alias = get_option('gallium-pvr-alias')
+  if gallium_pvr_alias == 'pvr'
+    gallium_pvr_alias = ''
+  endif
+  with_gallium_pvr_alias = gallium_pvr_alias != ''
+else
+  gallium_pvr_alias = ''
+  with_gallium_pvr_alias = false
 endif
 
 with_dri = false
@@ -288,6 +306,7 @@ with_broadcom_vk = _vulkan_drivers.contains('broadcom')
 with_imagination_vk = _vulkan_drivers.contains('imagination-experimental')
 with_imagination_srv = get_option('imagination-srv')
 with_microsoft_vk = _vulkan_drivers.contains('microsoft-experimental')
+with_pvr_vk = _vulkan_drivers.contains('pvr')
 with_any_vk = _vulkan_drivers.length() != 0
 
 with_any_broadcom = with_gallium_vc4 or with_gallium_v3d or with_broadcom_vk
@@ -342,7 +361,7 @@ endforeach
 _platforms = get_option('platforms')
 if _platforms.contains('auto')
   if system_has_kms_drm
-    _platforms = ['x11', 'wayland']
+    _platforms = ['x11', 'wayland', 'null']
   elif ['darwin', 'cygwin'].contains(host_machine.system())
     _platforms = ['x11']
   elif ['haiku'].contains(host_machine.system())
@@ -360,6 +379,11 @@ with_platform_x11 = _platforms.contains('x11')
 with_platform_wayland = _platforms.contains('wayland')
 with_platform_haiku = _platforms.contains('haiku')
 with_platform_windows = _platforms.contains('windows')
+with_platform_null = _platforms.contains('null')
+
+if with_platform_null
+  null_dri_driver_name = get_option('null-dri-driver-name')
+endif
 
 with_glx = get_option('glx')
 if with_glx == 'auto'
@@ -484,7 +508,7 @@ elif _egl == 'enabled'
     error('EGL requires dri, haiku, or windows')
   elif not with_shared_glapi
     error('EGL requires shared-glapi')
-  elif not ['disabled', 'dri'].contains(with_glx)
+  elif not ['disabled', 'dri', 'null'].contains(with_glx)
     error('EGL requires dri, but a GLX is being built without dri')
   elif host_machine.system() == 'darwin'
     error('EGL is not available on MacOS')
@@ -508,6 +532,10 @@ endif
 
 if with_egl and not _platforms.contains(egl_native_platform)
   error('-Degl-native-platform does not specify an enabled platform')
+endif
+
+if with_egl and with_opengl and with_glx != 'disabled'
+   pre_args += '-DEGL_WITH_OPENGL'
 endif
 
 if 'x11' in _platforms
@@ -538,7 +566,7 @@ endforeach
 if not have_mtls_dialect
   # need .run to check libc support. meson aborts when calling .run when
   # cross-compiling, but because this is just an optimization we can skip it
-  if meson.is_cross_build() and not meson.has_exe_wrapper()
+  if meson.is_cross_build()
     warning('cannot auto-detect -mtls-dialect when cross-compiling, using compiler default')
   else
     # -fpic to force dynamic tls, otherwise TLS relaxation defeats check
@@ -561,7 +589,7 @@ if not have_mtls_dialect
   endif
 endif
 
-if with_glx != 'disabled'
+if with_glx != 'disabled' and with_glx != 'null'
   if not (with_platform_x11 and with_any_opengl)
     error('Cannot build GLX support without X11 platform support and at least one OpenGL API')
   elif with_glx == 'xlib'
@@ -619,7 +647,7 @@ if with_any_vk and (with_platform_x11 and not with_dri3)
   error('Vulkan drivers require dri3 for X11 support')
 endif
 if with_dri
-  if with_glx == 'disabled' and not with_egl and not with_gbm
+  if (with_glx == 'disabled' or with_glx == 'null') and not with_egl and not with_gbm
     error('building dri drivers require at least one windowing system')
   endif
 endif
@@ -989,6 +1017,10 @@ if with_platform_android
     '-DANDROID',
     '-DANDROID_API_LEVEL=' + get_option('platform-sdk-version').to_string()
   ]
+endif
+
+if with_platform_null
+  pre_args += '-DHAVE_NULL_PLATFORM'
 endif
 
 prog_python = import('python').find_installation('python3')
@@ -1710,7 +1742,8 @@ with_gallium_drisw_kms = false
 dep_libdrm = dependency(
   'libdrm', version : '>=' + _drm_ver,
   # GNU/Hurd includes egl_dri2, without drm.
-  required : (with_dri2 and host_machine.system() != 'gnu') or with_dri3
+  required : (with_dri2 and host_machine.system() != 'gnu') or with_dri3 or
+             with_platform_null
 )
 if dep_libdrm.found()
   pre_args += '-DHAVE_LIBDRM'

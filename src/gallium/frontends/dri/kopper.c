@@ -324,7 +324,7 @@ dri3_create_image_from_buffers(xcb_connection_t *c,
                                         bp_reply->width,
                                         bp_reply->height,
                                         image_format_to_fourcc(format),
-                                        bp_reply->modifier,
+                                        bp_reply->modifier == DRM_FORMAT_MOD_INVALID ? DRM_FORMAT_MOD_LINEAR : bp_reply->modifier,
                                         fds, bp_reply->nfd,
                                         strides, offsets,
                                         0, 0, 0, 0, /* UNDEFINED */
@@ -1044,8 +1044,12 @@ const __DRIkopperExtension driKopperExtension = {
 const struct __DriverAPIRec galliumvk_driver_api = {
    .InitScreen = kopper_init_screen,
    .DestroyScreen = dri_destroy_screen,
+   .CreateContext = dri_create_context,
+   .DestroyContext = dri_destroy_context,
    .CreateBuffer = kopper_create_buffer,
    .DestroyBuffer = dri_destroy_buffer,
+   .MakeCurrent = dri_make_current,
+   .UnbindContext = dri_unbind_context,
    .SwapBuffers = kopper_swap_buffers,
    .CopySubBuffer = NULL,
 };

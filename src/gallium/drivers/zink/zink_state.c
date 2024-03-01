@@ -411,8 +411,8 @@ zink_bind_blend_state(struct pipe_context *pctx, void *cso)
       state->dirty |= !zink_screen(pctx->screen)->have_full_ds3;
       bool force_dual_color_blend = zink_screen(pctx->screen)->driconf.dual_color_blend_by_location &&
                                     blend && blend->dual_src_blend && state->blend_state->attachments[0].blendEnable;
-      if (force_dual_color_blend != zink_get_fs_key(ctx)->force_dual_color_blend)
-         zink_set_fs_key(ctx)->force_dual_color_blend = force_dual_color_blend;
+      if (force_dual_color_blend != zink_get_fs_base_key(ctx)->force_dual_color_blend)
+         zink_set_fs_base_key(ctx)->force_dual_color_blend = force_dual_color_blend;
       ctx->blend_state_changed = true;
    }
 }
@@ -510,7 +510,7 @@ zink_bind_depth_stencil_alpha_state(struct pipe_context *pctx, void *cso)
 {
    struct zink_context *ctx = zink_context(pctx);
 
-   bool prev_zwrite = ctx->dsa_state ? ctx->dsa_state->hw_state.depth_write : false;
+   bool prev_zswrite = ctx->dsa_state ? ctx->dsa_state->hw_state.depth_write || ctx->dsa_state->hw_state.stencil_test : false;
    ctx->dsa_state = cso;
 
    if (cso) {
@@ -521,7 +521,8 @@ zink_bind_depth_stencil_alpha_state(struct pipe_context *pctx, void *cso)
          ctx->dsa_state_changed = true;
       }
    }
-   if (prev_zwrite != (ctx->dsa_state ? ctx->dsa_state->hw_state.depth_write : false)) {
+   bool zs_write = ctx->dsa_state ? ctx->dsa_state->hw_state.depth_write || ctx->dsa_state->hw_state.stencil_test : false;
+   if (prev_zswrite != zs_write) {
       /* flag renderpass for re-check on next draw */
       ctx->rp_layout_changed = true;
    }
@@ -564,7 +565,10 @@ zink_create_rasterizer_state(struct pipe_context *pctx,
 
    state->base = *rs_state;
    state->base.line_stipple_factor++;
-   state->hw_state.line_stipple_enable = rs_state->line_stipple_enable;
+
+   state->hw_state.line_stipple_enable =
+      rs_state->line_stipple_enable &&
+      !screen->driver_workarounds.no_linestipple;
 
    assert(rs_state->depth_clip_far == rs_state->depth_clip_near);
    state->hw_state.depth_clip = rs_state->depth_clip_near;
@@ -575,8 +579,15 @@ zink_create_rasterizer_state(struct pipe_context *pctx,
    assert(rs_state->fill_front <= PIPE_POLYGON_MODE_POINT);
    if (rs_state->fill_back != rs_state->fill_front)
       debug_printf("BUG: vulkan doesn't support different front and back fill modes\n");
-   state->hw_state.polygon_mode = rs_state->fill_front; // same values
-   state->cull_mode = rs_state->cull_face; // same bits
+
+   if (rs_state->fill_front == PIPE_POLYGON_MODE_POINT &&
+       screen->driver_workarounds.no_hw_gl_point) {
+      state->hw_state.polygon_mode = VK_POLYGON_MODE_FILL;
+      state->cull_mode = VK_CULL_MODE_NONE;
+   } else {
+      state->hw_state.polygon_mode = rs_state->fill_front; // same values
+      state->cull_mode = rs_state->cull_face; // same bits
+   }
 
    state->front_face = rs_state->front_ccw ?
                        VK_FRONT_FACE_COUNTER_CLOCKWISE :
@@ -584,7 +595,8 @@ zink_create_rasterizer_state(struct pipe_context *pctx,
 
    state->hw_state.line_mode = VK_LINE_RASTERIZATION_MODE_DEFAULT_EXT;
    if (rs_state->line_rectangular) {
-      if (rs_state->line_smooth)
+      if (rs_state->line_smooth &&
+          !screen->driver_workarounds.no_linesmooth)
          state->hw_state.line_mode = VK_LINE_RASTERIZATION_MODE_RECTANGULAR_SMOOTH_EXT;
       else
          state->hw_state.line_mode = VK_LINE_RASTERIZATION_MODE_RECTANGULAR_EXT;
@@ -638,7 +650,7 @@ zink_bind_rasterizer_state(struct pipe_context *pctx, void *cso)
       ctx->rast_state_changed = true;
 
       if (clip_halfz != ctx->rast_state->base.clip_halfz) {
-         if (!screen->driver_workarounds.depth_clip_control_missing)
+         if (screen->info.have_EXT_depth_clip_control)
             ctx->gfx_pipeline_state.dirty = true;
          else
             zink_set_last_vertex_key(ctx)->clip_halfz = ctx->rast_state->base.clip_halfz;
@@ -647,6 +659,11 @@ zink_bind_rasterizer_state(struct pipe_context *pctx, void *cso)
 
       if (fabs(ctx->rast_state->base.line_width - line_width) > FLT_EPSILON)
          ctx->line_width_changed = true;
+
+      bool lower_gl_point = screen->driver_workarounds.no_hw_gl_point;
+      lower_gl_point &= ctx->rast_state->base.fill_front == PIPE_POLYGON_MODE_POINT;
+      if (zink_get_gs_key(ctx)->lower_gl_point != lower_gl_point)
+         zink_set_gs_key(ctx)->lower_gl_point = lower_gl_point;
 
       if (ctx->gfx_pipeline_state.dyn_state1.front_face != ctx->rast_state->front_face) {
          ctx->gfx_pipeline_state.dyn_state1.front_face = ctx->rast_state->front_face;
@@ -667,7 +684,7 @@ zink_bind_rasterizer_state(struct pipe_context *pctx, void *cso)
          ctx->scissor_changed = true;
 
       if (ctx->rast_state->base.force_persample_interp != force_persample_interp) {
-         zink_set_fs_key(ctx)->force_persample_interp = ctx->rast_state->base.force_persample_interp;
+         zink_set_fs_base_key(ctx)->force_persample_interp = ctx->rast_state->base.force_persample_interp;
          ctx->gfx_pipeline_state.dirty = true;
       }
       ctx->gfx_pipeline_state.force_persample_interp = ctx->rast_state->base.force_persample_interp;

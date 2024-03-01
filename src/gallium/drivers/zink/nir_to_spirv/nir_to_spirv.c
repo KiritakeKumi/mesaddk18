@@ -780,6 +780,25 @@ emit_output(struct ntv_context *ctx, struct nir_variable *var)
 }
 
 static void
+emit_shader_temp(struct ntv_context *ctx, struct nir_variable *var)
+{
+   SpvId var_type = get_glsl_type(ctx, var->type);
+
+   SpvId pointer_type = spirv_builder_type_pointer(&ctx->builder,
+                                                   SpvStorageClassPrivate,
+                                                   var_type);
+   SpvId var_id = spirv_builder_emit_var(&ctx->builder, pointer_type,
+                                         SpvStorageClassPrivate);
+   if (var->name)
+      spirv_builder_emit_name(&ctx->builder, var_id, var->name);
+
+   _mesa_hash_table_insert(ctx->vars, var, (void *)(intptr_t)var_id);
+
+   assert(ctx->num_entry_ifaces < ARRAY_SIZE(ctx->entry_ifaces));
+   ctx->entry_ifaces[ctx->num_entry_ifaces++] = var_id;
+}
+
+static void
 emit_temp(struct ntv_context *ctx, struct nir_variable *var)
 {
    SpvId var_type = get_glsl_type(ctx, var->type);
@@ -3286,7 +3305,7 @@ emit_intrinsic(struct ntv_context *ctx, nir_intrinsic_instr *intr)
       emit_load_uint_input(ctx, intr, &ctx->sample_mask_in_var, "gl_SampleMaskIn", SpvBuiltInSampleMask);
       break;
 
-   case nir_intrinsic_emit_vertex_with_counter:
+   case nir_intrinsic_emit_vertex:
       /* geometry shader emits copied xfb outputs just prior to EmitVertex(),
        * since that's the end of the shader
        */
@@ -3297,11 +3316,7 @@ emit_intrinsic(struct ntv_context *ctx, nir_intrinsic_instr *intr)
                                    ctx->nir->info.stage == MESA_SHADER_GEOMETRY && util_bitcount(ctx->nir->info.gs.active_stream_mask) > 1);
       break;
 
-   case nir_intrinsic_set_vertex_and_primitive_count:
-      /* do nothing */
-      break;
-
-   case nir_intrinsic_end_primitive_with_counter:
+   case nir_intrinsic_end_primitive:
       spirv_builder_end_primitive(&ctx->builder, nir_intrinsic_stream_id(intr),
                                   ctx->nir->info.stage == MESA_SHADER_GEOMETRY && util_bitcount(ctx->nir->info.gs.active_stream_mask) > 1);
       break;
@@ -3831,26 +3846,22 @@ emit_tex(struct ntv_context *ctx, nir_tex_instr *tex)
       return;
    }
    SpvId actual_dest_type;
-   if (dref && tex->op != nir_texop_tg4)
-      actual_dest_type = spirv_builder_type_float(&ctx->builder, 32);
-   else {
-      unsigned num_components = nir_dest_num_components(tex->dest);
-      switch (nir_alu_type_get_base_type(tex->dest_type)) {
-      case nir_type_int:
-         actual_dest_type = get_ivec_type(ctx, 32, num_components);
-         break;
+   unsigned num_components = nir_dest_num_components(tex->dest);
+   switch (nir_alu_type_get_base_type(tex->dest_type)) {
+   case nir_type_int:
+      actual_dest_type = get_ivec_type(ctx, 32, num_components);
+      break;
 
-      case nir_type_uint:
-         actual_dest_type = get_uvec_type(ctx, 32, num_components);
-         break;
+   case nir_type_uint:
+      actual_dest_type = get_uvec_type(ctx, 32, num_components);
+      break;
 
-      case nir_type_float:
-         actual_dest_type = get_fvec_type(ctx, 32, num_components);
-         break;
+   case nir_type_float:
+      actual_dest_type = get_fvec_type(ctx, 32, num_components);
+      break;
 
-      default:
-         unreachable("unexpected nir_alu_type");
-      }
+   default:
+      unreachable("unexpected nir_alu_type");
    }
 
    SpvId result;
@@ -4740,6 +4751,9 @@ nir_to_spirv(struct nir_shader *s, const struct zink_shader_info *sinfo, uint32_
 
       ctx.regs[reg->index] = var;
    }
+
+   nir_foreach_variable_with_modes(var, s, nir_var_shader_temp)
+      emit_shader_temp(&ctx, var);
 
    nir_foreach_function_temp_variable(var, entry)
       emit_temp(&ctx, var);

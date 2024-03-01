@@ -147,11 +147,6 @@ enum zink_descriptor_type {
    ZINK_DESCRIPTOR_NON_BINDLESS_TYPES = ZINK_DESCRIPTOR_BASE_TYPES + 1, /**< for struct sizing */
 };
 
-enum zink_descriptor_mode {
-   ZINK_DESCRIPTOR_MODE_AUTO,
-   ZINK_DESCRIPTOR_MODE_LAZY,
-};
-
 /* indexing for descriptor template management */
 enum zink_descriptor_size_index {
    ZDS_INDEX_UBO,
@@ -507,7 +502,6 @@ struct zink_batch_state {
    struct zink_resource *swapchain;
    struct util_dynarray acquires;
    struct util_dynarray acquire_flags;
-   struct util_dynarray unref_semaphores;
 
    struct util_queue_fence flush_completed;
 
@@ -689,14 +683,13 @@ struct zink_shader {
 
    union {
       struct {
-         struct zink_shader *generated; // a generated shader that this shader "owns"
-      } tes;
-
-      struct {
+         struct zink_shader *generated_tcs; // a generated shader that this shader "owns"; only valid in the tes stage
+         struct zink_shader *generated_gs; // a generated shader that this shader "owns"
          bool is_generated; // if this is a driver-created shader (e.g., tcs)
-      } tcs;
+      } non_fs;
 
       struct {
+         uint32_t legacy_shadow_mask; //is_new_style_shadow is false for these
          nir_variable *fbfetch; //for fs output
       } fs;
    };
@@ -763,6 +756,7 @@ struct zink_gfx_pipeline_state {
    uint32_t vertex_buffers_enabled_mask;
    uint32_t vertex_strides[PIPE_MAX_ATTRIBS];
    struct zink_vertex_elements_hw_state *element_state;
+   struct zink_zs_swizzle_key *shadow;
    bool sample_locations_enabled;
    enum pipe_prim_type shader_rast_prim, rast_prim; /* reduced type or max for unknown */
    union {
@@ -810,6 +804,9 @@ struct zink_gfx_push_constant {
    unsigned framebuffer_is_layered;
    float default_inner_level[2];
    float default_outer_level[4];
+   uint32_t line_stipple_pattern;
+   float viewport_scale[2];
+   float line_width;
 };
 
 /* The order of the enums MUST match the order of the zink_gfx_push_constant
@@ -821,6 +818,9 @@ enum zink_gfx_push_constant_member {
    ZINK_GFX_PUSHCONST_FRAMEBUFFER_IS_LAYERED,
    ZINK_GFX_PUSHCONST_DEFAULT_INNER_LEVEL,
    ZINK_GFX_PUSHCONST_DEFAULT_OUTER_LEVEL,
+   ZINK_GFX_PUSHCONST_LINE_STIPPLE_PATTERN,
+   ZINK_GFX_PUSHCONST_VIEWPORT_SCALE,
+   ZINK_GFX_PUSHCONST_LINE_WIDTH,
    ZINK_GFX_PUSHCONST_MAX
 };
 
@@ -833,9 +833,10 @@ struct zink_shader_module {
    uint32_t hash;
    bool default_variant;
    bool has_nonseamless;
+   bool needs_zs_shader_swizzle;
    uint8_t num_uniforms;
    uint8_t key_size;
-   uint8_t key[0]; /* | key | uniforms | */
+   uint8_t key[0]; /* | key | uniforms | zs shader swizzle | */
 };
 
 struct zink_program {
@@ -860,6 +861,7 @@ struct zink_program {
 };
 
 #define STAGE_MASK_OPTIMAL (1<<16)
+#define STAGE_MASK_OPTIMAL_SHADOW (1<<17)
 typedef bool (*equals_gfx_pipeline_state_func)(const void *a, const void *b);
 
 struct zink_gfx_library_key {
@@ -1185,6 +1187,9 @@ struct zink_screen {
    struct util_queue flush_queue;
    struct zink_context *copy_context;
 
+   simple_mtx_t semaphores_lock;
+   struct util_dynarray semaphores;
+
    unsigned buffer_rebind_counter;
    unsigned image_rebind_counter;
    unsigned robust_ctx_count;
@@ -1278,12 +1283,16 @@ struct zink_screen {
 
    struct {
       bool broken_l4a4;
-      bool depth_clip_control_missing;
       bool implicit_sync;
       bool always_feedback_loop;
       bool always_feedback_loop_zs;
       bool needs_sanitised_layer;
       bool track_renderpasses;
+      bool no_linestipple;
+      bool no_linesmooth;
+      bool no_hw_gl_point;
+      bool lower_robustImageAccess2;
+      bool needs_zs_shader_swizzle;
       unsigned z16_unscaled_bias;
       unsigned z24_unscaled_bias;
    } driver_workarounds;
@@ -1339,6 +1348,7 @@ struct zink_ctx_surface {
    /* TODO: use VK_EXT_multisampled_render_to_single_sampled */
    struct zink_ctx_surface *transient; //for use with EXT_multisample_render_to_texture
    bool transient_init; //whether the transient surface has data
+   bool needs_mutable;
 };
 
 /* use this cast for framebuffer surfaces */
@@ -1409,6 +1419,8 @@ struct zink_sampler_view {
       struct zink_buffer_view *buffer_view;
    };
    struct zink_surface *cube_array;
+   struct zink_surface *zs_view;
+   struct zink_zs_swizzle swizzle;
 };
 
 struct zink_image_view {
@@ -1644,6 +1656,9 @@ struct zink_context {
       uint8_t num_images[MESA_SHADER_STAGES];
 
       VkDescriptorImageInfo fbfetch;
+
+      /* the current state of the zs swizzle data */
+      struct zink_zs_swizzle_key zs_swizzle[MESA_SHADER_STAGES];
 
       struct zink_resource *descriptor_res[ZINK_DESCRIPTOR_BASE_TYPES][MESA_SHADER_STAGES][PIPE_MAX_SAMPLERS];
 

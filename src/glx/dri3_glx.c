@@ -78,6 +78,7 @@
 #include "loader.h"
 #include "loader_dri_helper.h"
 #include "dri2.h"
+#include "util/os_file.h"
 
 static struct dri3_drawable *
 loader_drawable_to_dri3_drawable(struct loader_dri3_drawable *draw) {
@@ -357,6 +358,21 @@ glx_to_loader_dri3_drawable_type(int type)
    }
 }
 
+static bool
+dri3_has_multibuffer(const __DRIimageExtension *image,
+                     const struct dri3_display *pdp)
+{
+#ifdef HAVE_DRI3_MODIFIERS
+   return (image && image->base.version >= 15) &&
+          (pdp->dri3Major > 1 ||
+             (pdp->dri3Major == 1 && pdp->dri3Minor >= 2)) &&
+          (pdp->presentMajor > 1 ||
+             (pdp->presentMajor == 1 && pdp->presentMinor >= 2));
+#else
+   return false;
+#endif
+}
+
 static __GLXDRIdrawable *
 dri3_create_drawable(struct glx_screen *base, XID xDrawable,
                      GLXDrawable drawable, int type,
@@ -365,11 +381,9 @@ dri3_create_drawable(struct glx_screen *base, XID xDrawable,
    struct dri3_drawable *pdraw;
    struct dri3_screen *psc = (struct dri3_screen *) base;
    __GLXDRIconfigPrivate *config = (__GLXDRIconfigPrivate *) config_base;
-   bool has_multibuffer = false;
-#ifdef HAVE_DRI3_MODIFIERS
    const struct dri3_display *const pdp = (struct dri3_display *)
       base->display->dri3Display;
-#endif
+   bool has_multibuffer = dri3_has_multibuffer(psc->image, pdp);
 
    pdraw = calloc(1, sizeof(*pdraw));
    if (!pdraw)
@@ -379,14 +393,6 @@ dri3_create_drawable(struct glx_screen *base, XID xDrawable,
    pdraw->base.xDrawable = xDrawable;
    pdraw->base.drawable = drawable;
    pdraw->base.psc = &psc->base;
-
-#ifdef HAVE_DRI3_MODIFIERS
-   if ((psc->image && psc->image->base.version >= 15) &&
-       (pdp->dri3Major > 1 || (pdp->dri3Major == 1 && pdp->dri3Minor >= 2)) &&
-       (pdp->presentMajor > 1 ||
-        (pdp->presentMajor == 1 && pdp->presentMinor >= 2)))
-      has_multibuffer = true;
-#endif
 
    (void) __glXInitialize(psc->base.dpy);
 
@@ -537,6 +543,14 @@ dri3_flush_swap_buffers(__DRIdrawable *driDrawable, void *loaderPrivate)
    loader_dri3_swapbuffer_barrier(draw);
 }
 
+static int
+dri3_get_display_fd(void *loaderPrivate)
+{
+   struct dri3_screen *psc = (struct dri3_screen *)loaderPrivate;
+
+   return psc->fd_dpy;
+}
+
 static void
 dri_set_background_context(void *loaderPrivate)
 {
@@ -555,11 +569,12 @@ dri_is_thread_safe(void *loaderPrivate)
 /* The image loader extension record for DRI3
  */
 static const __DRIimageLoaderExtension imageLoaderExtension = {
-   .base = { __DRI_IMAGE_LOADER, 3 },
+   .base = { __DRI_IMAGE_LOADER, 5 },
 
    .getBuffers          = loader_dri3_get_buffers,
    .flushFrontBuffer    = dri3_flush_front_buffer,
    .flushSwapBuffers    = dri3_flush_swap_buffers,
+   .getDisplayFD        = dri3_get_display_fd,
 };
 
 const __DRIuseInvalidateExtension dri3UseInvalidate = {
@@ -625,6 +640,10 @@ dri3_destroy_screen(struct glx_screen *base)
    loader_dri3_close_screen(psc->driScreen);
    (*psc->core->destroyScreen) (psc->driScreen);
    driDestroyConfigs(psc->driver_configs);
+
+   if (psc->fd_dpy != psc->fd)
+      close(psc->fd_dpy);
+
    close(psc->fd);
    free(psc);
 }
@@ -714,13 +733,14 @@ static const struct glx_context_vtable dri3_context_vtable = {
    .interop_flush_objects = dri3_interop_flush_objects
 };
 
-/** dri3_bind_extensions
+/** dri3_bind_extensions_part1
  *
- * Enable all of the extensions supported on DRI3
+ * Enable the extensions supported on DRI3 that don't depend on
+ * whether we are using a different GPU.
  */
 static void
-dri3_bind_extensions(struct dri3_screen *psc, struct glx_display * priv,
-                     const char *driverName)
+dri3_bind_extensions_part1(struct dri3_screen *psc, struct glx_display * priv,
+                           const char *driverName)
 {
    const __DRIextension **extensions;
    unsigned mask;
@@ -751,16 +771,6 @@ dri3_bind_extensions(struct dri3_screen *psc, struct glx_display * priv,
    }
 
    for (i = 0; extensions[i]; i++) {
-      /* when on a different gpu than the server, the server pixmaps
-       * can have a tiling mode we can't read. Thus we can't create
-       * a texture from them.
-       */
-      if (!psc->is_different_gpu &&
-         (strcmp(extensions[i]->name, __DRI_TEX_BUFFER) == 0)) {
-         psc->texBuffer = (__DRItexBufferExtension *) extensions[i];
-         __glXEnableDirectExtension(&psc->base, "GLX_EXT_texture_from_pixmap");
-      }
-
       if ((strcmp(extensions[i]->name, __DRI2_FLUSH) == 0)) {
          psc->f = (__DRI2flushExtension *) extensions[i];
          /* internal driver extension, no GL extension exposed */
@@ -793,6 +803,33 @@ dri3_bind_extensions(struct dri3_screen *psc, struct glx_display * priv,
       if (strcmp(extensions[i]->name, __DRI2_FLUSH_CONTROL) == 0)
          __glXEnableDirectExtension(&psc->base,
                                     "GLX_ARB_context_flush_control");
+   }
+}
+
+/** dri3_bind_extensions_part2
+ *
+ * Enable the extensions supported on DRI3 that depend on whether we
+ * are using a different GPU.
+ */
+static void
+dri3_bind_extensions_part2(struct dri3_screen *psc, struct glx_display * priv,
+                           const char *driverName)
+{
+   const __DRIextension **extensions;
+   int i;
+
+   extensions = psc->core->getExtensions(psc->driScreen);
+
+   for (i = 0; extensions[i]; i++) {
+      /* when on a different gpu than the server, the server pixmaps
+       * can have a tiling mode we can't read. Thus we can't create
+       * a texture from them.
+       */
+      if (!psc->is_different_gpu &&
+         (strcmp(extensions[i]->name, __DRI_TEX_BUFFER) == 0)) {
+         psc->texBuffer = (__DRItexBufferExtension *) extensions[i];
+         __glXEnableDirectExtension(&psc->base, "GLX_EXT_texture_from_pixmap");
+      }
    }
 }
 
@@ -835,8 +872,11 @@ dri3_create_screen(int screen, struct glx_display * priv)
    struct dri3_screen *psc;
    __GLXDRIscreen *psp;
    struct glx_config *configs = NULL, *visuals = NULL;
-   char *driverName, *driverNameDisplayGPU, *tmp;
+   char *driverName = NULL, *driverNameDisplayGPU, *tmp;
    int i;
+   int fd_old;
+   bool is_different_gpu;
+   bool have_modifiers;
 
    psc = calloc(1, sizeof *psc);
    if (psc == NULL)
@@ -844,6 +884,7 @@ dri3_create_screen(int screen, struct glx_display * priv)
 
    psc->fd = -1;
    psc->fd_display_gpu = -1;
+   psc->fd_dpy = -1;
 
    if (!glx_screen_init(&psc->base, screen, priv)) {
       free(psc);
@@ -864,11 +905,22 @@ dri3_create_screen(int screen, struct glx_display * priv)
       return NULL;
    }
 
+   fd_old = psc->fd;
+   psc->fd_dpy = os_dupfd_cloexec(psc->fd);
    psc->fd_display_gpu = fcntl(psc->fd, F_DUPFD_CLOEXEC, 3);
-   psc->fd = loader_get_user_preferred_fd(psc->fd, &psc->is_different_gpu);
-   if (!psc->is_different_gpu) {
+   psc->fd = loader_get_user_preferred_fd(psc->fd, &is_different_gpu);
+   if (!is_different_gpu) {
       close(psc->fd_display_gpu);
       psc->fd_display_gpu = -1;
+   }
+   if (psc->fd == fd_old) {
+      if (psc->fd_dpy != -1)
+         close(psc->fd_dpy);
+
+      psc->fd_dpy = psc->fd;
+   } else if (psc->fd_dpy == -1) {
+         ErrorMessageF("Unable to dup the display FD");
+         goto handle_error;
    }
 
    driverName = loader_get_driver_for_fd(psc->fd);
@@ -899,27 +951,6 @@ dri3_create_screen(int screen, struct glx_display * priv)
       goto handle_error;
    }
 
-   if (psc->is_different_gpu) {
-      driverNameDisplayGPU = loader_get_driver_for_fd(psc->fd_display_gpu);
-      if (driverNameDisplayGPU) {
-
-         /* check if driver name is matching so that non mesa drivers
-          * will not crash. Also need this check since image extension
-          * pointer from render gpu is shared with display gpu. Image
-          * extension pointer is shared because it keeps things simple.
-          */
-         if (strcmp(driverName, driverNameDisplayGPU) == 0) {
-            psc->driScreenDisplayGPU =
-               psc->image_driver->createNewScreen2(screen, psc->fd_display_gpu,
-                                                   pdp->loader_extensions,
-                                                   extensions,
-                                                   &driver_configs, psc);
-         }
-
-         free(driverNameDisplayGPU);
-      }
-   }
-
    psc->driScreen =
       psc->image_driver->createNewScreen2(screen, psc->fd,
                                           pdp->loader_extensions,
@@ -931,7 +962,42 @@ dri3_create_screen(int screen, struct glx_display * priv)
       goto handle_error;
    }
 
-   dri3_bind_extensions(psc, priv, driverName);
+   dri3_bind_extensions_part1(psc, priv, driverName);
+
+   have_modifiers = loader_dri3_has_modifiers(dri3_has_multibuffer(psc->image,
+                                                                   pdp),
+                                              psc->image);
+
+   if (is_different_gpu) {
+      if (have_modifiers) {
+         close(psc->fd_display_gpu);
+         psc->fd_display_gpu = -1;
+      } else {
+         driverNameDisplayGPU = loader_get_driver_for_fd(psc->fd_display_gpu);
+         if (driverNameDisplayGPU) {
+
+            /* check if driver name is matching so that non mesa drivers
+             * will not crash. Also need this check since image extension
+             * pointer from render gpu is shared with display gpu. Image
+             * extension pointer is shared because it keeps things simple.
+             */
+            if (strcmp(driverName, driverNameDisplayGPU) == 0) {
+               psc->driScreenDisplayGPU =
+                  psc->image_driver->createNewScreen2(screen,
+                                                      psc->fd_display_gpu,
+                                                      pdp->loader_extensions,
+                                                      extensions,
+                                                      &driver_configs, psc);
+            }
+
+            free(driverNameDisplayGPU);
+         }
+      }
+   }
+
+   psc->is_different_gpu = is_different_gpu && !have_modifiers;
+
+   dri3_bind_extensions_part2(psc, priv, driverName);
 
    if (!psc->image || psc->image->base.version < 7 || !psc->image->createImageFromFds) {
       ErrorMessageF("Version 7 or imageFromFds image extension not found\n");
@@ -1075,6 +1141,8 @@ handle_error:
    if (psc->driScreenDisplayGPU)
        psc->core->destroyScreen(psc->driScreenDisplayGPU);
    psc->driScreenDisplayGPU = NULL;
+   if (psc->fd_dpy >= 0 && psc->fd_dpy != psc->fd)
+      close(psc->fd_dpy);
    if (psc->fd >= 0)
       close(psc->fd);
    if (psc->fd_display_gpu >= 0)

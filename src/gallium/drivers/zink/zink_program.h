@@ -240,21 +240,50 @@ zink_program_has_descriptors(const struct zink_program *pg)
    return pg->num_dsl > 0;
 }
 
-static inline struct zink_fs_key *
-zink_set_fs_key(struct zink_context *ctx)
+static inline struct zink_fs_key_base *
+zink_set_fs_base_key(struct zink_context *ctx)
 {
    ctx->dirty_gfx_stages |= BITFIELD_BIT(MESA_SHADER_FRAGMENT);
    return zink_screen(ctx->base.screen)->optimal_keys ?
           &ctx->gfx_pipeline_state.shader_keys_optimal.key.fs :
-          &ctx->gfx_pipeline_state.shader_keys.key[MESA_SHADER_FRAGMENT].key.fs;
+          &ctx->gfx_pipeline_state.shader_keys.key[MESA_SHADER_FRAGMENT].key.fs.base;
+}
+
+static inline const struct zink_fs_key_base *
+zink_get_fs_base_key(struct zink_context *ctx)
+{
+   return zink_screen(ctx->base.screen)->optimal_keys ?
+          &ctx->gfx_pipeline_state.shader_keys_optimal.key.fs :
+          &ctx->gfx_pipeline_state.shader_keys.key[MESA_SHADER_FRAGMENT].key.fs.base;
+}
+
+static inline struct zink_fs_key *
+zink_set_fs_key(struct zink_context *ctx)
+{
+   assert(!zink_screen(ctx->base.screen)->optimal_keys);
+   ctx->dirty_gfx_stages |= BITFIELD_BIT(MESA_SHADER_FRAGMENT);
+   return &ctx->gfx_pipeline_state.shader_keys.key[MESA_SHADER_FRAGMENT].key.fs;
 }
 
 static inline const struct zink_fs_key *
 zink_get_fs_key(struct zink_context *ctx)
 {
-   return zink_screen(ctx->base.screen)->optimal_keys ?
-          &ctx->gfx_pipeline_state.shader_keys_optimal.key.fs :
-          &ctx->gfx_pipeline_state.shader_keys.key[MESA_SHADER_FRAGMENT].key.fs;
+   assert(!zink_screen(ctx->base.screen)->optimal_keys);
+   return &ctx->gfx_pipeline_state.shader_keys.key[MESA_SHADER_FRAGMENT].key.fs;
+}
+
+static inline struct zink_gs_key *
+zink_set_gs_key(struct zink_context *ctx)
+{
+   ctx->dirty_gfx_stages |= BITFIELD_BIT(MESA_SHADER_GEOMETRY);
+   assert(!zink_screen(ctx->base.screen)->optimal_keys);
+   return &ctx->gfx_pipeline_state.shader_keys.key[MESA_SHADER_GEOMETRY].key.gs;
+}
+
+static inline const struct zink_gs_key *
+zink_get_gs_key(struct zink_context *ctx)
+{
+   return &ctx->gfx_pipeline_state.shader_keys.key[MESA_SHADER_GEOMETRY].key.gs;
 }
 
 static inline bool
@@ -316,15 +345,18 @@ zink_get_last_vertex_key(struct zink_context *ctx)
 static inline void
 zink_set_fs_point_coord_key(struct zink_context *ctx)
 {
-   const struct zink_fs_key *fs = zink_get_fs_key(ctx);
+   const struct zink_fs_key_base *fs = zink_get_fs_base_key(ctx);
    bool disable = ctx->gfx_pipeline_state.rast_prim != PIPE_PRIM_POINTS;
    uint8_t coord_replace_bits = disable ? 0 : ctx->rast_state->base.sprite_coord_enable;
    bool point_coord_yinvert = disable ? false : !!ctx->rast_state->base.sprite_coord_mode;
    if (fs->coord_replace_bits != coord_replace_bits || fs->point_coord_yinvert != point_coord_yinvert) {
-      zink_set_fs_key(ctx)->coord_replace_bits = coord_replace_bits;
-      zink_set_fs_key(ctx)->point_coord_yinvert = point_coord_yinvert;
+      zink_set_fs_base_key(ctx)->coord_replace_bits = coord_replace_bits;
+      zink_set_fs_base_key(ctx)->point_coord_yinvert = point_coord_yinvert;
    }
 }
+
+void
+zink_set_primitive_emulation_keys(struct zink_context *ctx);
 
 static inline const struct zink_shader_key_base *
 zink_get_shader_key_base(struct zink_context *ctx, gl_shader_stage pstage)
@@ -339,6 +371,24 @@ zink_set_shader_key_base(struct zink_context *ctx, gl_shader_stage pstage)
    ctx->dirty_gfx_stages |= BITFIELD_BIT(pstage);
    assert(!zink_screen(ctx->base.screen)->optimal_keys);
    return &ctx->gfx_pipeline_state.shader_keys.key[pstage].base;
+}
+
+static inline void
+zink_set_zs_needs_shader_swizzle_key(struct zink_context *ctx, gl_shader_stage pstage, bool swizzle_update)
+{
+   if (!zink_screen(ctx->base.screen)->driver_workarounds.needs_zs_shader_swizzle) {
+      if (pstage != MESA_SHADER_FRAGMENT)
+         return;
+      const struct zink_fs_key_base *fs = zink_get_fs_base_key(ctx);
+      bool enable = ctx->gfx_stages[MESA_SHADER_FRAGMENT] && (ctx->gfx_stages[MESA_SHADER_FRAGMENT]->fs.legacy_shadow_mask & ctx->di.zs_swizzle[pstage].mask) > 0;
+      if (enable != fs->shadow_needs_shader_swizzle || (enable && swizzle_update))
+         zink_set_fs_base_key(ctx)->shadow_needs_shader_swizzle = enable;
+      return;
+   }
+   bool enable = !!ctx->di.zs_swizzle[pstage].mask;
+   const struct zink_shader_key_base *key = zink_get_shader_key_base(ctx, pstage);
+   if (enable != key->needs_zs_shader_swizzle || (enable && swizzle_update))
+      zink_set_shader_key_base(ctx, pstage)->needs_zs_shader_swizzle = enable;
 }
 
 bool

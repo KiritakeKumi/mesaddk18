@@ -41,7 +41,6 @@
 
 #include <stdbool.h>
 #include "dri_util.h"
-#include "dri_context.h"
 #include "dri_screen.h"
 #include "util/u_endian.h"
 #include "util/driconf.h"
@@ -49,6 +48,7 @@
 #include "main/version.h"
 #include "main/debug_output.h"
 #include "main/errors.h"
+#include "util/bitscan.h"
 
 driOptionDescription __dri2ConfigOptions[] = {
       DRI_CONF_SECTION_DEBUG
@@ -196,6 +196,18 @@ swkmsCreateNewScreen(int scrn, int fd,
                               driver_configs, data);
 }
 
+#if defined(GALLIUM_PVR)
+static __DRIscreen *
+pvrCreateNewScreen(int scrn, int fd,
+		   const __DRIextension **extensions,
+		   const __DRIconfig ***driver_configs, void *data)
+{
+   return driCreateNewScreen2(scrn, fd, extensions,
+                              pvr_driver_extensions,
+                              driver_configs, data);
+}
+#endif
+
 /** swrast driver createNewScreen entrypoint. */
 static __DRIscreen *
 driSWRastCreateNewScreen(int scrn, const __DRIextension **extensions,
@@ -290,7 +302,11 @@ driGetConfigAttribIndex(const __DRIconfig *config,
     SIMPLE_CASE(__DRI_ATTRIB_SAMPLES, samples);
     case __DRI_ATTRIB_RENDER_TYPE:
         /* no support for color index mode */
-        *value = __DRI_ATTRIB_RGBA_BIT;
+        if (config->modes.rgbMode)
+            *value = __DRI_ATTRIB_RGBA_BIT;
+        else
+            *value = __DRI_ATTRIB_YUV_BIT;
+
         if (config->modes.floatMode)
             *value |= __DRI_ATTRIB_FLOAT_BIT;
         break;
@@ -322,9 +338,9 @@ driGetConfigAttribIndex(const __DRIconfig *config,
     SIMPLE_CASE(__DRI_ATTRIB_GREEN_MASK, greenMask);
     SIMPLE_CASE(__DRI_ATTRIB_BLUE_MASK, blueMask);
     SIMPLE_CASE(__DRI_ATTRIB_ALPHA_MASK, alphaMask);
-    case __DRI_ATTRIB_MAX_PBUFFER_WIDTH:
-    case __DRI_ATTRIB_MAX_PBUFFER_HEIGHT:
-    case __DRI_ATTRIB_MAX_PBUFFER_PIXELS:
+    SIMPLE_CASE(__DRI_ATTRIB_MAX_PBUFFER_WIDTH, maxPbufferWidth);
+    SIMPLE_CASE(__DRI_ATTRIB_MAX_PBUFFER_HEIGHT, maxPbufferHeight);
+    SIMPLE_CASE(__DRI_ATTRIB_MAX_PBUFFER_PIXELS, maxPbufferPixels);
     case __DRI_ATTRIB_OPTIMAL_PBUFFER_WIDTH:
     case __DRI_ATTRIB_OPTIMAL_PBUFFER_HEIGHT:
     case __DRI_ATTRIB_VISUAL_SELECT_GROUP:
@@ -358,6 +374,12 @@ driGetConfigAttribIndex(const __DRIconfig *config,
     SIMPLE_CASE(__DRI_ATTRIB_GREEN_SHIFT, greenShift);
     SIMPLE_CASE(__DRI_ATTRIB_BLUE_SHIFT, blueShift);
     SIMPLE_CASE(__DRI_ATTRIB_ALPHA_SHIFT, alphaShift);
+    SIMPLE_CASE(__DRI_ATTRIB_YUV_ORDER, YUVOrder);
+    SIMPLE_CASE(__DRI_ATTRIB_YUV_NUMBER_OF_PLANES, YUVNumberOfPlanes);
+    SIMPLE_CASE(__DRI_ATTRIB_YUV_SUBSAMPLE, YUVSubsample);
+    SIMPLE_CASE(__DRI_ATTRIB_YUV_DEPTH_RANGE, YUVDepthRange);
+    SIMPLE_CASE(__DRI_ATTRIB_YUV_CSC_STANDARD, YUVCSCStandard);
+    SIMPLE_CASE(__DRI_ATTRIB_YUV_PLANE_BPP, YUVPlaneBPP);
     default:
         /* XXX log an error or smth */
         return GL_FALSE;
@@ -478,7 +500,11 @@ driCreateContextAttribs(__DRIscreen *screen, int api,
         mesa_api = API_OPENGLES;
         break;
     case __DRI_API_GLES2:
+        ctx_config.major_version = 2;
+        mesa_api = API_OPENGLES2;
+        break;
     case __DRI_API_GLES3:
+        ctx_config.major_version = 3;
         mesa_api = API_OPENGLES2;
         break;
     case __DRI_API_OPENGL_CORE:
@@ -639,8 +665,8 @@ driCreateContextAttribs(__DRIscreen *screen, int api,
     context->driDrawablePriv = NULL;
     context->driReadablePriv = NULL;
 
-    if (!dri_create_context(mesa_api, modes, context, &ctx_config, error,
-                            shareCtx)) {
+    if (!screen->driver->CreateContext(mesa_api, modes, context,
+                                       &ctx_config, error, shareCtx)) {
         free(context);
         return NULL;
     }
@@ -664,7 +690,14 @@ static __DRIcontext *
 driCreateNewContext(__DRIscreen *screen, const __DRIconfig *config,
                     __DRIcontext *shared, void *data)
 {
-    return driCreateNewContextForAPI(screen, __DRI_API_OPENGL,
+    int apifs;
+
+    apifs = ffs(screen->api_mask);
+
+    if (!apifs)
+        return NULL;
+
+    return driCreateNewContextForAPI(screen, apifs - 1,
                                      config, shared, data);
 }
 
@@ -679,7 +712,7 @@ static void
 driDestroyContext(__DRIcontext *pcp)
 {
     if (pcp) {
-        dri_destroy_context(pcp);
+        pcp->driScreenPriv->driver->DestroyContext(pcp);
         free(pcp);
     }
 }
@@ -732,7 +765,7 @@ static int driBindContext(__DRIcontext *pcp,
         dri_get_drawable(prp);
     }
 
-    return dri_make_current(pcp, pdp, prp);
+    return pcp->driScreenPriv->driver->MakeCurrent(pcp, pdp, prp);
 }
 
 /**
@@ -765,10 +798,10 @@ static int driUnbindContext(__DRIcontext *pcp)
         return GL_FALSE;
 
     /*
-    ** Call dri_unbind_context before checking for valid drawables
+    ** Call UnbindContext before checking for valid drawables
     ** to handle surfaceless contexts properly.
     */
-    dri_unbind_context(pcp);
+    pcp->driScreenPriv->driver->UnbindContext(pcp);
 
     pdp = pcp->driDrawablePriv;
     prp = pcp->driReadablePriv;
@@ -1002,6 +1035,21 @@ const __DRIdri2Extension swkmsDRI2Extension = {
     .createNewScreen2           = driCreateNewScreen2,
 };
 
+#if defined(GALLIUM_PVR)
+const __DRIdri2Extension pvrDRI2Extension = {
+    .base = { __DRI_DRI2, 4 },
+
+    .createNewScreen            = pvrCreateNewScreen,
+    .createNewDrawable          = driCreateNewDrawable,
+    .createNewContext           = driCreateNewContext,
+    .getAPIMask                 = driGetAPIMask,
+    .createNewContextForAPI     = driCreateNewContextForAPI,
+    .allocateBuffer             = dri2AllocateBuffer,
+    .releaseBuffer              = dri2ReleaseBuffer,
+    .createContextAttribs       = driCreateContextAttribs,
+    .createNewScreen2           = driCreateNewScreen2,
+};
+#endif
 #endif
 
 const __DRIswrastExtension driSWRastExtension = {
@@ -1045,6 +1093,11 @@ static const struct {
       .image_format    = __DRI_IMAGE_FORMAT_ARGB1555,
       .mesa_format     =        MESA_FORMAT_B5G5R5A1_UNORM,
       .internal_format =        GL_RGB5_A1,
+   },
+   {
+      .image_format    = __DRI_IMAGE_FORMAT_ARGB4444,
+      .mesa_format     =        MESA_FORMAT_B4G4R4A4_UNORM,
+      .internal_format =        GL_RGBA4,
    },
    {
       .image_format    = __DRI_IMAGE_FORMAT_XRGB8888,

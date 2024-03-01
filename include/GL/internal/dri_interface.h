@@ -730,7 +730,13 @@ struct __DRIuseInvalidateExtensionRec {
 #define __DRI_ATTRIB_GREEN_SHIFT		51
 #define __DRI_ATTRIB_BLUE_SHIFT			52
 #define __DRI_ATTRIB_ALPHA_SHIFT		53
-#define __DRI_ATTRIB_MAX			54
+#define __DRI_ATTRIB_YUV_ORDER			54
+#define __DRI_ATTRIB_YUV_NUMBER_OF_PLANES	55
+#define __DRI_ATTRIB_YUV_SUBSAMPLE		56
+#define __DRI_ATTRIB_YUV_DEPTH_RANGE		57
+#define __DRI_ATTRIB_YUV_CSC_STANDARD		58
+#define __DRI_ATTRIB_YUV_PLANE_BPP		59
+#define __DRI_ATTRIB_MAX			60
 
 /* __DRI_ATTRIB_RENDER_TYPE */
 #define __DRI_ATTRIB_RGBA_BIT			0x01	
@@ -738,6 +744,7 @@ struct __DRIuseInvalidateExtensionRec {
 #define __DRI_ATTRIB_LUMINANCE_BIT		0x04
 #define __DRI_ATTRIB_FLOAT_BIT			0x08
 #define __DRI_ATTRIB_UNSIGNED_FLOAT_BIT		0x10
+#define __DRI_ATTRIB_YUV_BIT			0x20
 
 /* __DRI_ATTRIB_CONFIG_CAVEAT */
 #define __DRI_ATTRIB_SLOW_BIT			0x01
@@ -763,6 +770,39 @@ struct __DRIuseInvalidateExtensionRec {
 #define __DRI_ATTRIB_SWAP_EXCHANGE              0x8061
 #define __DRI_ATTRIB_SWAP_COPY                  0x8062
 #define __DRI_ATTRIB_SWAP_UNDEFINED             0x8063
+
+/* __DRI_ATTRIB_YUV_ORDER */
+#define __DRI_ATTRIB_YUV_ORDER_NONE             0x0
+#define __DRI_ATTRIB_YUV_ORDER_YUV_BIT          0x1
+#define __DRI_ATTRIB_YUV_ORDER_YVU_BIT          0x2
+#define __DRI_ATTRIB_YUV_ORDER_YUYV_BIT         0x4
+#define __DRI_ATTRIB_YUV_ORDER_UYVY_BIT         0x8
+#define __DRI_ATTRIB_YUV_ORDER_YVYU_BIT         0x10
+#define __DRI_ATTRIB_YUV_ORDER_VYUY_BIT         0x20
+#define __DRI_ATTRIB_YUV_ORDER_AYUV_BIT         0x40
+
+/* __DRI_ATTRIB_YUV_SUBSAMPLE */
+#define __DRI_ATTRIB_YUV_SUBSAMPLE_NONE         0x0
+#define __DRI_ATTRIB_YUV_SUBSAMPLE_4_2_0_BIT    0x1
+#define __DRI_ATTRIB_YUV_SUBSAMPLE_4_2_2_BIT    0x2
+#define __DRI_ATTRIB_YUV_SUBSAMPLE_4_4_4_BIT    0x4
+
+/* __DRI_ATTRIB_YUV_DEPTH_RANGE */
+#define __DRI_ATTRIB_YUV_DEPTH_RANGE_NONE       0x0
+#define __DRI_ATTRIB_YUV_DEPTH_RANGE_LIMITED_BIT 0x1
+#define __DRI_ATTRIB_YUV_DEPTH_RANGE_FULL_BIT   0x2
+
+/* __DRI_ATTRIB_YUV_CSC_STANDARD */
+#define __DRI_ATTRIB_YUV_CSC_STANDARD_NONE      0x0
+#define __DRI_ATTRIB_YUV_CSC_STANDARD_601_BIT   0x1
+#define __DRI_ATTRIB_YUV_CSC_STANDARD_709_BIT   0x2
+#define __DRI_ATTRIB_YUV_CSC_STANDARD_2020_BIT  0x4
+
+/* __DRI_ATTRIB_YUV_PLANE_BPP */
+#define __DRI_ATTRIB_YUV_PLANE_BPP_NONE         0x0
+#define __DRI_ATTRIB_YUV_PLANE_BPP_0_BIT        0x1
+#define __DRI_ATTRIB_YUV_PLANE_BPP_8_BIT        0x2
+#define __DRI_ATTRIB_YUV_PLANE_BPP_10_BIT       0x4
 
 /**
  * This extension defines the core DRI functionality.
@@ -975,7 +1015,7 @@ struct __DRIbufferRec {
 };
 
 #define __DRI_DRI2_LOADER "DRI_DRI2Loader"
-#define __DRI_DRI2_LOADER_VERSION 5
+#define __DRI_DRI2_LOADER_VERSION 6
 
 enum dri_loader_cap {
    /* Whether the loader handles RGBA channel ordering correctly. If not,
@@ -983,6 +1023,7 @@ enum dri_loader_cap {
     */
    DRI_LOADER_CAP_RGBA_ORDERING,
    DRI_LOADER_CAP_FP16,
+   DRI_LOADER_CAP_YUV_SURFACE_IMG = 0x7001,
 };
 
 struct __DRIdri2LoaderExtensionRec {
@@ -1055,6 +1096,17 @@ struct __DRIdri2LoaderExtensionRec {
      * \since 5
      */
     void (*destroyLoaderImageState)(void *loaderPrivate);
+
+    /**
+     * Get the display FD
+     *
+     * Get the FD of the display device.
+     *
+     * \param loaderPrivate The last parameter of createNewScreen or
+     *                      createNewScreen2.
+     * \since 6
+     */
+     int (*getDisplayFD)(void *loaderPrivate);
 };
 
 /**
@@ -1229,6 +1281,16 @@ struct __DRIdri2ExtensionRec {
 #define __DRI_IMAGE_FORMAT_SXRGB8       0x1016
 #define __DRI_IMAGE_FORMAT_ABGR16161616 0x1017
 #define __DRI_IMAGE_FORMAT_XBGR16161616 0x1018
+#define __DRI_IMAGE_FORMAT_ARGB4444     0x1019
+#define __DRI_IMAGE_FORMAT_YVU444_PACK10_IMG 0x101a
+#define __DRI_IMAGE_FORMAT_BGR888       0x101b
+#define __DRI_IMAGE_FORMAT_NV12         0x101c
+#define __DRI_IMAGE_FORMAT_NV21         0x101d
+#define __DRI_IMAGE_FORMAT_YU12         0x101e
+#define __DRI_IMAGE_FORMAT_YV12         0x101f
+#define __DRI_IMAGE_FORMAT_YVYU         0x1020
+#define __DRI_IMAGE_FORMAT_VYUY         0x1021
+#define __DRI_IMAGE_FORMAT_AXBXGXRX106106106106 0x1022
 
 #define __DRI_IMAGE_USE_SHARE		0x0001
 #define __DRI_IMAGE_USE_SCANOUT		0x0002
@@ -1260,6 +1322,8 @@ struct __DRIdri2ExtensionRec {
 #define __DRI_IMAGE_FOURCC_SARGB8888	0x83324258
 #define __DRI_IMAGE_FOURCC_SABGR8888	0x84324258
 #define __DRI_IMAGE_FOURCC_SXRGB8888	0x85324258
+#define __DRI_IMAGE_FOURCC_RGBA16161616 0x38344152  /* fourcc_code('R', 'A', '4', '8' ) */
+#define __DRI_IMAGE_FOURCC_SBGR888	0xff324742
 
 /**
  * Queryable on images created by createImageFromNames.
@@ -1279,11 +1343,12 @@ struct __DRIdri2ExtensionRec {
 #define __DRI_IMAGE_COMPONENTS_Y_U_V	0x3003
 #define __DRI_IMAGE_COMPONENTS_Y_UV	0x3004
 #define __DRI_IMAGE_COMPONENTS_Y_XUXV	0x3005
+#define __DRI_IMAGE_COMPONENTS_R	0x3006
+#define __DRI_IMAGE_COMPONENTS_RG	0x3007
 #define __DRI_IMAGE_COMPONENTS_Y_UXVX	0x3008
 #define __DRI_IMAGE_COMPONENTS_AYUV	0x3009
 #define __DRI_IMAGE_COMPONENTS_XYUV	0x300A
-#define __DRI_IMAGE_COMPONENTS_R	0x3006
-#define __DRI_IMAGE_COMPONENTS_RG	0x3007
+#define __DRI_IMAGE_COMPONENTS_EXTERNAL 0x300B
 
 
 /**
@@ -1352,6 +1417,8 @@ enum __DRIChromaSiting {
  */
 /*@{*/
 #define __DRI_IMAGE_CAP_GLOBAL_NAMES 1
+#define __DRI_IMAGE_CAP_PRIME_IMPORT 0x2000
+#define __DRI_IMAGE_CAP_PRIME_EXPORT 0x4000
 /*@}*/
 
 /**
@@ -1718,6 +1785,19 @@ struct __DRIimageExtensionRec {
     * \since 21
     */
    void (*setInFenceFd)(__DRIimage *image, int fd);
+
+   /**
+    * Support for experimental EGL_CL_IMAGE_IMG.
+    * Like createImageFromTexture, but from a buffer, the contents
+    * of which depend on the target.
+    *
+    * \since 8
+    */
+   __DRIimage *(*createImageFromBuffer)(__DRIcontext *context,
+                                        int target,
+                                        void *buffer,
+                                        unsigned *error,
+                                        void *loaderPrivate);
 };
 
 
@@ -1913,6 +1993,8 @@ typedef struct __DRIDriverVtableExtensionRec {
 
 #define __DRI2_RENDERER_HAS_PROTECTED_CONTEXT                 0x0020
 
+#define __DRI2_RENDERER_OPENGL_ES2_CONTEXT_CLIENT_VERSION_IMG 0x7001
+
 typedef struct __DRI2rendererQueryExtensionRec __DRI2rendererQueryExtension;
 struct __DRI2rendererQueryExtensionRec {
    __DRIextension base;
@@ -1976,16 +2058,20 @@ enum __DRIimageBufferMask {
     * OpenGL ES API and little change to the SurfaceFlinger API.
     */
    __DRI_IMAGE_BUFFER_SHARED = (1 << 2),
+#define DRI_IMAGE_HAS_BUFFER_PREV
+   __DRI_IMAGE_BUFFER_PREV = (1 << 31),
+
 };
 
 struct __DRIimageList {
    uint32_t image_mask;
    __DRIimage *back;
    __DRIimage *front;
+   __DRIimage *prev;
 };
 
 #define __DRI_IMAGE_LOADER "DRI_IMAGE_LOADER"
-#define __DRI_IMAGE_LOADER_VERSION 4
+#define __DRI_IMAGE_LOADER_VERSION 5
 
 struct __DRIimageLoaderExtensionRec {
     __DRIextension base;
@@ -2053,6 +2139,17 @@ struct __DRIimageLoaderExtensionRec {
      * \since 4
      */
     void (*destroyLoaderImageState)(void *loaderPrivate);
+
+    /**
+     * Get the display FD
+     *
+     * Get the FD of the display device.
+     *
+     * \param loaderPrivate The last parameter of createNewScreen or
+     *                      createNewScreen2.
+     * \since 5
+     */
+     int (*getDisplayFD)(void *loaderPrivate);
 };
 
 /**
