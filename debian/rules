@@ -145,13 +145,10 @@ confflags_GLES = -Dgles1=disabled -Dgles2=enabled
 confflags_GALLIUM += -Dgallium-drivers="[$(GALLIUM_DRIVERS_LIST)]"
 
 confflags += \
-	-Ddri-drivers="[$(DRI_DRIVERS_LIST)]" \
-	-Ddri-drivers-path=/usr/lib/$(DEB_HOST_MULTIARCH)/dri \
-	-Ddri-search-path='/usr/lib/$(DEB_HOST_MULTIARCH)/dri:\$$$${ORIGIN}/dri:/usr/lib/dri' \
+	-Dgallium-drivers=pvr \
 	-Dvulkan-drivers="[$(VULKAN_DRIVERS_LIST)]" \
 	-Dglvnd=true \
 	-Dshared-glapi=enabled \
-	-Dgallium-xvmc=disabled \
 	-Dgallium-omx=disabled \
 	-Db_ndebug=true \
 	-Dbuild-tests=true \
